@@ -665,9 +665,50 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 		defer resp.Body.Close()
 
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("error updating document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
+			retryWithoutCustomFields := false
+			if _, hasCustomFields := updatedFields["custom_fields"]; hasCustomFields {
+				lowerBody := strings.ToLower(string(bodyBytes))
+				if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) &&
+					strings.Contains(lowerBody, "custom") {
+					retryWithoutCustomFields = true
+				}
+			}
+
+			if !retryWithoutCustomFields {
+				return fmt.Errorf("error updating document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
+			}
+
+			log.Warnf("Document %d: custom_fields update failed validation (%d). Retrying update without custom_fields.", documentID, resp.StatusCode)
+			delete(updatedFields, "custom_fields")
+			delete(originalFields, "custom_fields")
+
+			if len(updatedFields) == 0 {
+				log.Warnf("Document %d: only custom_fields update was invalid; skipping custom_fields and continuing.", documentID)
+				continue
+			}
+
+			retryJSON, err := json.Marshal(updatedFields)
+			if err != nil {
+				return fmt.Errorf("error marshalling retry JSON for document %d: %w", documentID, err)
+			}
+
+			retryResp, err := client.Do(ctx, "PATCH", path, bytes.NewBuffer(retryJSON))
+			if err != nil {
+				return fmt.Errorf("error retrying update for document %d without custom_fields: %w", documentID, err)
+			}
+			defer retryResp.Body.Close()
+
+			retryBody, _ := io.ReadAll(retryResp.Body)
+			if retryResp.StatusCode != http.StatusOK {
+				return fmt.Errorf(
+					"error updating document %d after custom_fields fallback: %d, %s",
+					documentID,
+					retryResp.StatusCode,
+					string(retryBody),
+				)
+			}
 		}
 
 		// Check if we need to remove auto/manual tags in a separate update
