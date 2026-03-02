@@ -93,7 +93,7 @@ var (
 	createdDateTemplate   *template.Template
 	customFieldTemplate   *template.Template
 	ocrTemplate           *template.Template
-	adhocAnalysisTemplate *template.Template
+	summaryTemplate       *template.Template
 	templateMutex         sync.RWMutex
 
 	// Server-side settings
@@ -942,7 +942,7 @@ func loadTemplates() error {
 	if err != nil {
 		return err
 	}
-	adhocAnalysisTemplate, err = loadTemplate("adhoc-analysis_prompt.tmpl")
+	summaryTemplate, err = loadTemplate("summary_prompt.tmpl")
 	if err != nil {
 		return err
 	}
