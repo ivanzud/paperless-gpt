@@ -57,16 +57,25 @@ func updatePromptsHandler(c *gin.Context) {
 	}
 
 	// Basic input validation
-	if req.Filename == "" || !strings.HasSuffix(req.Filename, ".tmpl") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename or missing .tmpl extension"})
+	const maxPromptBytes = 64 * 1024
+	if !isValidPromptFilename(req.Filename) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename: must be a base name with .tmpl extension"})
 		return
 	}
-	if containsDotDot(req.Filename) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename: path traversal is not allowed"})
+	if len(req.Content) > maxPromptBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Template too large"})
 		return
 	}
 
-	promptPath := filepath.Join("prompts", req.Filename)
+	safeName := filepath.Base(req.Filename)
+	promptPath := filepath.Join("prompts", safeName)
+	// Ensure final path remains under prompts/
+	cleanPromptPath := filepath.Clean(promptPath)
+	promptsRoot := filepath.Clean("prompts") + string(os.PathSeparator)
+	if !strings.HasPrefix(cleanPromptPath, promptsRoot) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename: must reside under prompts/ directory"})
+		return
+	}
 
 	// Validate template content
 	_, err := template.New(req.Filename).Option("missingkey=error").Funcs(sprig.FuncMap()).Parse(req.Content)
@@ -137,33 +146,30 @@ func (app *App) updateSettingsHandler(c *gin.Context) {
 		return
 	}
 
-	// Apply updates to existing settings (merge approach)
-	if val, exists := updates["custom_fields_enable"]; exists {
-		if boolVal, ok := val.(bool); ok {
-			settings.CustomFieldsEnable = boolVal
-		}
+	// Normalize and validate
+	if newSettings.CustomFieldsWriteMode == "" {
+		newSettings.CustomFieldsWriteMode = "append"
 	}
-	if val, exists := updates["custom_fields_selected_ids"]; exists {
-		if arrayVal, ok := val.([]interface{}); ok {
-			ids := make([]int, 0, len(arrayVal))
-			for _, v := range arrayVal {
-				if floatVal, ok := v.(float64); ok {
-					ids = append(ids, int(floatVal))
-				}
+	if newSettings.CustomFieldsWriteMode != "append" && newSettings.CustomFieldsWriteMode != "replace" && newSettings.CustomFieldsWriteMode != "update" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "custom_fields_write_mode must be 'append', 'replace', or 'update'"})
+		return
+	}
+	// Deduplicate selected IDs
+	if len(newSettings.CustomFieldsSelectedIDs) > 1 {
+		seen := make(map[int]struct{}, len(newSettings.CustomFieldsSelectedIDs))
+		dedup := make([]int, 0, len(newSettings.CustomFieldsSelectedIDs))
+		for _, id := range newSettings.CustomFieldsSelectedIDs {
+			if _, ok := seen[id]; ok {
+				continue
 			}
-			settings.CustomFieldsSelectedIDs = ids
+			seen[id] = struct{}{}
+			dedup = append(dedup, id)
 		}
+		newSettings.CustomFieldsSelectedIDs = dedup
 	}
-	if val, exists := updates["custom_fields_write_mode"]; exists {
-		if strVal, ok := val.(string); ok {
-			settings.CustomFieldsWriteMode = strVal
-		}
-	}
-	if val, exists := updates["tags_auto_create"]; exists {
-		if boolVal, ok := val.(bool); ok {
-			settings.TagsAutoCreate = boolVal
-		}
-	}
+
+	// Update the global settings variable
+	settings = newSettings
 
 	// Save the updated settings to file
 	if err := saveSettingsLocked(); err != nil {
@@ -621,70 +627,18 @@ func (app *App) undoModificationHandler(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-// analyzeDocumentsHandler handles the POST /api/analyze-documents endpoint
-func (app *App) analyzeDocumentsHandler(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	var req AnalyzeDocumentsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request payload: %v", err)})
-		log.Errorf("Invalid request payload: %v", err)
-		return
+// isValidPromptFilename validates prompt filenames are base names under prompts/ with .tmpl suffix.
+func isValidPromptFilename(name string) bool {
+	if name == "" || !strings.HasSuffix(name, ".tmpl") {
+		return false
 	}
-
-	var documents []Document
-	for _, docID := range req.DocumentIDs {
-		doc, err := app.Client.GetDocument(ctx, docID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error fetching document %d: %v", docID, err)})
-			log.Errorf("Error fetching document %d: %v", docID, err)
-			return
-		}
-		documents = append(documents, doc)
+	// Disallow path separators
+	if strings.ContainsAny(name, `/\`) {
+		return false
 	}
-
-	// Create a new template from the prompt string in the request
-	tmpl, err := template.New("adhoc-analysis").Funcs(sprig.FuncMap()).Parse(req.Prompt)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid prompt template"})
-		log.Errorf("Invalid prompt template: %v", err)
-		return
+	// Ensure it's a base name (prevents absolute paths and nested directories)
+	if filepath.Base(name) != name {
+		return false
 	}
-
-	var promptBuffer bytes.Buffer
-	err = tmpl.Execute(&promptBuffer, map[string]interface{}{
-		"Documents": documents,
-		"Language":  getLikelyLanguage(),
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error executing adhoc analysis template"})
-		log.Errorf("Error executing adhoc analysis template: %v", err)
-		return
-	}
-
-	finalPrompt := promptBuffer.String()
-
-	// Call LLM with the custom prompt and document contexts
-	llmResponse, err := app.LLM.Call(ctx, finalPrompt)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error calling LLM"})
-		log.Errorf("Error calling LLM: %v", err)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"result": llmResponse})
-}
-
-// getVersionHandler handles the GET /api/version endpoint
-func getVersionHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"version":   version,
-		"commit":    commit,
-		"buildDate": buildDate,
-	})
-}
-
-// containsDotDot checks if a string contains ".." to prevent path traversal.
-func containsDotDot(s string) bool {
-	return strings.Contains(s, "..")
+	return true
 }
