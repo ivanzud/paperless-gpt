@@ -97,13 +97,73 @@ var (
 	summaryTemplate       *template.Template
 	templateMutex         sync.RWMutex
 
-	// Server-side settings
-	settings            Settings
-	settingsMutex       sync.RWMutex
-	customFieldsCache   []CustomField
-	customFieldsCacheMu sync.RWMutex
-	lastCacheRefresh    time.Time
-	cacheRefreshMutex   sync.Mutex
+	// Default templates
+	defaultTitleTemplate = `I will provide you with the OCR of a document.
+Your must reply an appropriate document title for use in paperless-ngx.
+Respond ONLY with an appropriate document title and NO additional information, for use in Paperless-ngx.
+
+<doc>
+<likely_language>{{.Language}}</likely_language>
+<title>{{.Title}}</title>
+<ocr>{{.Content}}</ocr>
+</doc>
+`
+
+	defaultTagTemplate = `I will provide you with a document's content and title, and a tags list.
+You have to select appropriate tags for that document.
+Respond ONLY with the selected tags as a comma-separated list and NO additional information.
+Be VERY selective and only choose the most relevant tags since too many tags will make the document less discoverable in Paperless-ngx.
+
+<tags_list>
+{{.AvailableTags | join ","}}
+</tags_list>
+
+<doc>
+<likely_language>{{.Language}}</likely_language>
+<title>{{.Title}}</title>
+<content>{{.Content}}</content>
+</doc>
+`
+	defaultCorrespondentTemplate = `I will provide you with the content of a document from my Paperless-ngx instance.
+Your have to reply the most likely correspondent (i.e. sender or recipient) of that document.
+Try to suggest a correspondent, either from the example list or come up with a new correspondent.
+Respond ONLY with a correspondent and NO additional information.
+Omit suffixes like "GmbH" or "AG" (e.g. "Amazon" instead of "Amazon EU S.a.r.l.").
+Use "Unknown" if you can't find a suitable correspondent.
+
+<example_correspondents>
+{{.AvailableCorrespondents | join ", "}}
+</example_correspondents>
+
+<blacklisted_correspondents>
+{{.BlackList | join ", "}}
+</blacklisted_correspondents>
+
+<doc>
+<likely_language>{{.Language}}</likely_language>
+<title>{{.Title}}</title>
+<content>{{.Content}}</content>
+</doc>
+
+`
+	defaultCreatedDateTemplate = `I will provide you with the content of a document.
+You have to find the creation date of that document.
+Respond ONLY with the date in YYYY-MM-DD format and NO additional information.
+Use X if you are missing an information (e.g. 2025-03-XX, XXXX-XX-XX if impossible to guess).
+Today's date is {{.Today}}.
+
+<doc>
+<likely_language>{{.Language}}</likely_language>
+<content>
+{{.Content}}
+</content>
+<doc>
+`
+	defaultOcrPrompt = `Just transcribe the text in this image and preserve the formatting and layout (high quality OCR). Do that for ALL the text in the image. Be thorough and pay attention. This is very important. The image is from a text document so be sure to continue until the bottom of the page. You forgot about some text yesterday so please focus today! Use markdown format.
+
+IMPORTANT: Never hallucinate or make up text that isn't clearly visible. If any text or part of the image is unclear, blurry, or unreadable, use "[UNREADABLE]" at that exact location instead of guessing what it might say. Only transcribe text that you can clearly and confidently read.
+
+Thanks a lot!`
 )
 
 // refreshCustomFieldsCache fetches custom fields from Paperless and updates the cache.
