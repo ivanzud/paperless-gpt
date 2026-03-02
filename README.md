@@ -235,6 +235,10 @@ services:
       # DOCLING_OCR_ENGINE: "easyocr" # Optional, defaults to "easyocr" (only used when `DOCLING_OCR_PIPELINE is set to 'standard')
 
 
+      # Option 5: iOS-OCR-Server
+      # OCR_PROVIDER: 'ios_ocr'              # Use iOS-OCR-Server
+      # IOS_OCR_SERVER_URL: 'http://your-ios-device-ip:8080' # URL of your iOS device running iOS-OCR-Server
+
       AUTO_OCR_TAG: "paperless-gpt-ocr-auto" # Optional, default: paperless-gpt-ocr-auto
       OCR_LIMIT_PAGES: "5" # Optional, default: 5. Set to 0 for no limit.
       LOG_LEVEL: "info" # Optional: debug, warn, error
@@ -387,6 +391,24 @@ paperless-gpt supports four different OCR providers, each with unique strengths 
   DOCLING_OCR_PIPELINE: "standard" # Optional, defaults to "vlm"
   DOCLING_OCR_ENGINE: "macocr" # Optional, defaults to "easyocr" (only used when `DOCLING_OCR_PIPELINE is set to 'standard')
   ```
+
+### 5. iOS-OCR-Server
+
+- **Key Features**:
+  - Turn your iPhone into a powerful local OCR server using Apple's Vision Framework
+  - No cloud dependencies, unlimited usage, complete privacy
+  - High-quality OCR using Apple's native Vision Framework
+  - Returns both text and bounding box information
+- **Best For**:
+  - Users with an iPhone/iPad who want high-quality OCR
+  - Privacy-focused environments requiring local processing
+  - Cost-effective solution for unlimited OCR processing
+- **Configuration**:
+  ```yaml
+  OCR_PROVIDER: "ios_ocr"
+  IOS_OCR_SERVER_URL: "http://your-ios-device-ip:8080"
+  ```
+- **Setup**: Follow the instructions at [iOS-OCR-Server](https://github.com/riddleling/iOS-OCR-Server) to set up the server on your iOS device.
 
 ## OCR Processing Modes
 
@@ -588,8 +610,7 @@ For best results with the enhanced OCR features:
 | `GOOGLE_APPLICATION_CREDENTIALS`    | Path to the mounted Google service account key. Required if OCR_PROVIDER is `google_docai`.                                                                                                   | Cond.    |                            |
 | `DOCLING_URL`                       | URL of the Docling server instance. Required if OCR_PROVIDER is `docling`.                                                                                                                    | Cond.    |                            |
 | `DOCLING_IMAGE_EXPORT_MODE`         | Mode for image export. Optional; defaults to `embedded` if unset.                                                                                                                             | No       | embedded                   |
-| `DOCLING_OCR_PIPELINE`              | Sets the pipeline type. Optional; defaults to `vlm` if unset.                                                                                                                                 | No       | vlm                        |
-| `DOCLING_OCR_ENGINE`                | Sets the ocr engine, if `DOCLING_OCR_PIPELINE` is set to `standard`. Optional; defaults to `easyocr`                                                                                          | No       | easyocr                    |
+| `IOS_OCR_SERVER_URL`                | URL of the iOS-OCR-Server instance. Required if OCR_PROVIDER is `ios_ocr`.                                                                                                                     | Cond.    |                            |
 | `CREATE_LOCAL_HOCR`                 | Whether to save hOCR files locally.                                                                                                                                                           | No       | false                      |
 | `LOCAL_HOCR_PATH`                   | Path where hOCR files will be saved when hOCR generation is enabled.                                                                                                                          | No       | /app/hocr                  |
 | `CREATE_LOCAL_PDF`                  | Whether to save enhanced PDFs locally.                                                                                                                                                        | No       | false                      |
