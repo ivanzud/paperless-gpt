@@ -77,6 +77,76 @@ func hasSameTags(original, suggested []string) bool {
 	return true
 }
 
+var selectOptionErrorRegex = regexp.MustCompile(`(?i)(?:'|")label(?:'|")\s*:\s*(?:'|")([^'"]+)(?:'|")\s*,\s*(?:'|")id(?:'|")\s*:\s*(?:'|")([^'"]+)(?:'|")`)
+
+func remapSelectCustomFieldLabelsFromError(updatedFields map[string]interface{}, responseBody []byte, documentID int) bool {
+	customFields, ok := updatedFields["custom_fields"].([]CustomFieldResponse)
+	if !ok || len(customFields) == 0 {
+		return false
+	}
+
+	var errorPayload struct {
+		CustomFields []map[string][]string `json:"custom_fields"`
+	}
+	if err := json.Unmarshal(responseBody, &errorPayload); err != nil || len(errorPayload.CustomFields) == 0 {
+		return false
+	}
+
+	changed := false
+	for i, fieldErrors := range errorPayload.CustomFields {
+		if i >= len(customFields) {
+			break
+		}
+
+		messages := fieldErrors["non_field_errors"]
+		if len(messages) == 0 {
+			continue
+		}
+
+		currentValue, isString := customFields[i].Value.(string)
+		if !isString {
+			continue
+		}
+		currentValue = strings.TrimSpace(currentValue)
+		if currentValue == "" {
+			continue
+		}
+
+		options := parseSelectOptionsFromValidationMessages(messages)
+		mappedID, exists := options[strings.ToLower(currentValue)]
+		if !exists {
+			continue
+		}
+
+		customFields[i].Value = mappedID
+		changed = true
+		log.Infof("Document %d: mapped custom field %d select label %q to id %q", documentID, customFields[i].Field, currentValue, mappedID)
+	}
+
+	if changed {
+		updatedFields["custom_fields"] = customFields
+	}
+	return changed
+}
+
+func parseSelectOptionsFromValidationMessages(messages []string) map[string]string {
+	options := make(map[string]string)
+	for _, message := range messages {
+		matches := selectOptionErrorRegex.FindAllStringSubmatch(message, -1)
+		for _, match := range matches {
+			if len(match) < 3 {
+				continue
+			}
+			label := strings.ToLower(strings.TrimSpace(match[1]))
+			id := strings.TrimSpace(match[2])
+			if label != "" && id != "" {
+				options[label] = id
+			}
+		}
+	}
+	return options
+}
+
 // NewPaperlessClient creates a new instance of PaperlessClient with a default HTTP client
 func NewPaperlessClient(baseURL, apiToken string) *PaperlessClient {
 	cacheFolder := os.Getenv("PAPERLESS_GPT_CACHE_DIR")
@@ -653,61 +723,63 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 
 		log.Debugf("Document %d: Fields to update: %v", documentID, updatedFields)
-		jsonData, err := json.Marshal(updatedFields)
-		if err != nil {
-			return fmt.Errorf("error marshalling JSON for document %d: %w", documentID, err)
+		path := fmt.Sprintf("api/documents/%d/", documentID)
+
+		patchDocument := func(fields map[string]interface{}) (int, []byte, error) {
+			jsonData, err := json.Marshal(fields)
+			if err != nil {
+				return 0, nil, fmt.Errorf("error marshalling JSON for document %d: %w", documentID, err)
+			}
+
+			resp, err := client.Do(ctx, "PATCH", path, bytes.NewBuffer(jsonData))
+			if err != nil {
+				return 0, nil, err
+			}
+			defer resp.Body.Close()
+
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, bodyBytes, nil
 		}
 
-		path := fmt.Sprintf("api/documents/%d/", documentID)
-		resp, err := client.Do(ctx, "PATCH", path, bytes.NewBuffer(jsonData))
+		statusCode, bodyBytes, err := patchDocument(updatedFields)
 		if err != nil {
 			return fmt.Errorf("error updating document %d: %w", documentID, err)
 		}
-		defer resp.Body.Close()
 
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			retryWithoutCustomFields := false
-			if _, hasCustomFields := updatedFields["custom_fields"]; hasCustomFields {
+		if statusCode != http.StatusOK {
+			hasCustomFields := false
+			if _, hasCustomFields = updatedFields["custom_fields"]; hasCustomFields {
 				lowerBody := strings.ToLower(string(bodyBytes))
-				if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) &&
+				if (statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity) &&
 					strings.Contains(lowerBody, "custom") {
-					retryWithoutCustomFields = true
+					// Try to recover select-field values by mapping label -> id from validation hints.
+					if remapSelectCustomFieldLabelsFromError(updatedFields, bodyBytes, documentID) {
+						statusCode, bodyBytes, err = patchDocument(updatedFields)
+						if err != nil {
+							return fmt.Errorf("error retrying update for document %d after select mapping: %w", documentID, err)
+						}
+					}
+
+					if statusCode != http.StatusOK {
+						log.Warnf("Document %d: custom_fields update failed validation (%d). Retrying update without custom_fields.", documentID, statusCode)
+						delete(updatedFields, "custom_fields")
+						delete(originalFields, "custom_fields")
+
+						if len(updatedFields) == 0 {
+							log.Warnf("Document %d: only custom_fields update was invalid; skipping custom_fields and continuing.", documentID)
+							continue
+						}
+
+						statusCode, bodyBytes, err = patchDocument(updatedFields)
+						if err != nil {
+							return fmt.Errorf("error retrying update for document %d without custom_fields: %w", documentID, err)
+						}
+					}
 				}
 			}
 
-			if !retryWithoutCustomFields {
-				return fmt.Errorf("error updating document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
-			}
-
-			log.Warnf("Document %d: custom_fields update failed validation (%d). Retrying update without custom_fields.", documentID, resp.StatusCode)
-			delete(updatedFields, "custom_fields")
-			delete(originalFields, "custom_fields")
-
-			if len(updatedFields) == 0 {
-				log.Warnf("Document %d: only custom_fields update was invalid; skipping custom_fields and continuing.", documentID)
-				continue
-			}
-
-			retryJSON, err := json.Marshal(updatedFields)
-			if err != nil {
-				return fmt.Errorf("error marshalling retry JSON for document %d: %w", documentID, err)
-			}
-
-			retryResp, err := client.Do(ctx, "PATCH", path, bytes.NewBuffer(retryJSON))
-			if err != nil {
-				return fmt.Errorf("error retrying update for document %d without custom_fields: %w", documentID, err)
-			}
-			defer retryResp.Body.Close()
-
-			retryBody, _ := io.ReadAll(retryResp.Body)
-			if retryResp.StatusCode != http.StatusOK {
-				return fmt.Errorf(
-					"error updating document %d after custom_fields fallback: %d, %s",
-					documentID,
-					retryResp.StatusCode,
-					string(retryBody),
-				)
+			if statusCode != http.StatusOK {
+				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
 			}
 		}
 
