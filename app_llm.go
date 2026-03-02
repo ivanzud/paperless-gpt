@@ -88,6 +88,7 @@ func (app *App) getSuggestedTags(
 	availableTags = removeTagFromList(availableTags, manualTag)
 	availableTags = removeTagFromList(availableTags, autoTag)
 	availableTags = removeTagFromList(availableTags, autoOcrTag)
+	availableTags = removeTagFromList(availableTags, pdfOCRCompleteTag)
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{

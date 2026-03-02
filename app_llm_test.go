@@ -262,6 +262,53 @@ func TestTokenLimitInTagGeneration(t *testing.T) {
 	assert.LessOrEqual(t, len(tokens), 50, "Final prompt should be within token limit")
 }
 
+func TestGetSuggestedTagsFiltersProcessingTags(t *testing.T) {
+	testLogger := logrus.WithField("test", "filter-processing-tags")
+
+	// Initialize tag template used by getSuggestedTags
+	var err error
+	tagTemplate, err = template.New("tag").Parse(testTagTemplate)
+	require.NoError(t, err)
+
+	// Save and restore processing tag globals
+	origManualTag := manualTag
+	origAutoTag := autoTag
+	origAutoOcrTag := autoOcrTag
+	origPdfOcrCompleteTag := pdfOCRCompleteTag
+	defer func() {
+		manualTag = origManualTag
+		autoTag = origAutoTag
+		autoOcrTag = origAutoOcrTag
+		pdfOCRCompleteTag = origPdfOcrCompleteTag
+	}()
+
+	manualTag = "paperless-gpt"
+	autoTag = "paperless-gpt-auto"
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+
+	mockLLM := &mockLLM{Response: "finance"}
+	app := &App{LLM: mockLLM}
+
+	availableTags := []string{
+		"paperless-gpt",
+		"paperless-gpt-auto",
+		"paperless-gpt-ocr-auto",
+		"paperless-gpt-ocr-complete",
+		"finance",
+	}
+	originalTags := []string{}
+
+	_, err = app.getSuggestedTags(context.Background(), "sample content", "Test Title", availableTags, originalTags, testLogger)
+	require.NoError(t, err)
+
+	assert.Contains(t, mockLLM.lastPrompt, "finance")
+	assert.NotContains(t, mockLLM.lastPrompt, "paperless-gpt")
+	assert.NotContains(t, mockLLM.lastPrompt, "paperless-gpt-auto")
+	assert.NotContains(t, mockLLM.lastPrompt, "paperless-gpt-ocr-auto")
+	assert.NotContains(t, mockLLM.lastPrompt, "paperless-gpt-ocr-complete")
+}
+
 func TestTokenLimitInTitleGeneration(t *testing.T) {
 	testLogger := logrus.WithField("test", "test")
 
