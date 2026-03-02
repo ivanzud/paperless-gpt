@@ -269,6 +269,7 @@ func main() {
 		GoogleProcessorID:        os.Getenv("GOOGLE_PROCESSOR_ID"),
 		VisionLLMProvider:        visionLlmProvider,
 		VisionLLMModel:           visionLlmModel,
+		VisionLLMHost:            resolveVisionOllamaHost(),
 		VisionLLMPrompt:          ocrPrompt,
 		AzureEndpoint:            azureDocAIEndpoint,
 		AzureAPIKey:              azureDocAIKey,
@@ -1084,13 +1085,9 @@ func createVisionLLM() (llms.Model, error) {
 		// Apply rate limiting with isVision=true
 		return NewRateLimitedLLM(llm, getRateLimitConfig(true)), nil
 	case "ollama":
-		host := os.Getenv("OLLAMA_HOST")
-		if host == "" {
-			host = "http://127.0.0.1:11434"
-		}
 		opts := []ollama.Option{
 			ollama.WithModel(visionLlmModel),
-			ollama.WithServerURL(host),
+			ollama.WithServerURL(resolveVisionOllamaHost()),
 		}
 		if ctxLenStr := os.Getenv("OLLAMA_CONTEXT_LENGTH"); ctxLenStr != "" {
 			if parsed, err := strconv.Atoi(ctxLenStr); err == nil && parsed > 0 {
@@ -1133,6 +1130,19 @@ func createVisionLLM() (llms.Model, error) {
 		log.Infoln("Vision LLM not enabled")
 		return nil, nil
 	}
+}
+
+func resolveVisionOllamaHost() string {
+	if host := os.Getenv("VISION_OLLAMA_HOST"); host != "" {
+		return host
+	}
+	if host := os.Getenv("VISION_LLM_HOST"); host != "" {
+		return host
+	}
+	if host := os.Getenv("OLLAMA_HOST"); host != "" {
+		return host
+	}
+	return "http://127.0.0.1:11434"
 }
 
 func createCustomHTTPClient() *http.Client {

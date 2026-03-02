@@ -93,7 +93,7 @@ func TestCreateLLMWithOpenAICompatible(t *testing.T) {
 			// Set environment variables
 			t.Setenv("OPENAI_API_KEY", tt.apiKey)
 			t.Setenv("OPENAI_BASE_URL", tt.baseURL)
-			
+
 			// Update global vars
 			llmProvider = "openai"
 			llmModel = "test-model"
@@ -157,7 +157,7 @@ func TestCreateVisionLLMWithOpenAICompatible(t *testing.T) {
 			// Set environment variables
 			t.Setenv("OPENAI_API_KEY", tt.apiKey)
 			t.Setenv("OPENAI_BASE_URL", tt.baseURL)
-			
+
 			// Update global vars
 			visionLlmProvider = "openai"
 			visionLlmModel = "test-vision-model"
@@ -172,6 +172,55 @@ func TestCreateVisionLLMWithOpenAICompatible(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NotNil(t, llm)
 			}
+		})
+	}
+}
+
+func TestResolveVisionOllamaHost(t *testing.T) {
+	tests := []struct {
+		name              string
+		visionOllamaHost  string
+		visionLLMHost     string
+		ollamaHost        string
+		expectedHostValue string
+	}{
+		{
+			name:              "prefers VISION_OLLAMA_HOST",
+			visionOllamaHost:  "http://vision-ollama:11434",
+			visionLLMHost:     "http://vision-llm-host:11434",
+			ollamaHost:        "http://default-ollama:11434",
+			expectedHostValue: "http://vision-ollama:11434",
+		},
+		{
+			name:              "falls back to VISION_LLM_HOST",
+			visionOllamaHost:  "",
+			visionLLMHost:     "http://vision-llm-host:11434",
+			ollamaHost:        "http://default-ollama:11434",
+			expectedHostValue: "http://vision-llm-host:11434",
+		},
+		{
+			name:              "falls back to OLLAMA_HOST",
+			visionOllamaHost:  "",
+			visionLLMHost:     "",
+			ollamaHost:        "http://default-ollama:11434",
+			expectedHostValue: "http://default-ollama:11434",
+		},
+		{
+			name:              "uses built in default",
+			visionOllamaHost:  "",
+			visionLLMHost:     "",
+			ollamaHost:        "",
+			expectedHostValue: "http://127.0.0.1:11434",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("VISION_OLLAMA_HOST", tt.visionOllamaHost)
+			t.Setenv("VISION_LLM_HOST", tt.visionLLMHost)
+			t.Setenv("OLLAMA_HOST", tt.ollamaHost)
+
+			assert.Equal(t, tt.expectedHostValue, resolveVisionOllamaHost())
 		})
 	}
 }

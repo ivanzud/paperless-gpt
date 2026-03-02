@@ -48,7 +48,7 @@ type Config struct {
 	VisionLLMTemperature *float64
 
 	// Google AI (Gemini) settings
-	GoogleAIAPIKey       string
+	GoogleAIAPIKey         string
 	GoogleAIThinkingBudget *int32
 
 	// Ollama OCR-specific settings
@@ -63,6 +63,7 @@ type Config struct {
 	// LLM settings (from existing config)
 	VisionLLMProvider string
 	VisionLLMModel    string
+	VisionLLMHost     string // Optional host override for Ollama vision/OCR traffic
 	VisionLLMPrompt   string
 
 	// Azure Document Intelligence settings

@@ -195,6 +195,7 @@ services:
       VISION_LLM_PROVIDER: "ollama" # openai, ollama, mistral, or anthropic
       VISION_LLM_MODEL: "minicpm-v" # minicpm-v (ollama) or gpt-4o (openai) or claude-sonnet-4-5 (anthropic/claude)
       OLLAMA_HOST: "http://host.docker.internal:11434" # If using Ollama
+      # VISION_OLLAMA_HOST: "http://ollama-gpu:11434" # Optional: dedicated Ollama host for OCR vision model
 
       # OCR Processing Mode
       OCR_PROCESS_MODE: "image" # Optional, default: image, other options: pdf, whole_pdf
@@ -320,6 +321,7 @@ paperless-gpt supports four different OCR providers, each with unique strengths 
   OCR_PROVIDER: "llm"
   VISION_LLM_PROVIDER: "openai" # or "ollama"
   VISION_LLM_MODEL: "gpt-4o" # or "minicpm-v"
+  # VISION_OLLAMA_HOST: "http://ollama-gpu:11434" # Optional override when VISION_LLM_PROVIDER=ollama
   ```
 
 ### 2. Azure Document Intelligence
@@ -585,6 +587,8 @@ For best results with the enhanced OCR features:
 | `GOOGLEAI_API_KEY`                  | Google Gemini API key (required if using `LLM_PROVIDER=googleai`).                                                                                                                            | Cond.    |                            |
 | `GOOGLEAI_THINKING_BUDGET`          | (Optional, googleai only) Integer. Controls Gemini "thinking" budget. If unset, model default is used (thinking enabled if supported). Set to `0` to disable thinking (if model supports it). | No       |                            |
 | `OLLAMA_HOST`                       | Ollama server URL (e.g. `http://host.docker.internal:11434`).                                                                                                                                 | No       |                            |
+| `VISION_OLLAMA_HOST`                | Optional Ollama URL used only for OCR vision requests (`VISION_LLM_PROVIDER=ollama`). Falls back to `VISION_LLM_HOST`, then `OLLAMA_HOST`.                                                   | No       |                            |
+| `VISION_LLM_HOST`                   | Alias for `VISION_OLLAMA_HOST`. Useful if you prefer provider-agnostic naming.                                                                                                                | No       |                            |
 | `LLM_REQUESTS_PER_MINUTE`           | Maximum requests per minute for the main LLM. Useful for managing API costs or local LLM load.                                                                                                | No       | 120                        |
 | `LLM_MAX_RETRIES`                   | Maximum retry attempts for failed main LLM requests.                                                                                                                                          | No       | 3                          |
 | `LLM_BACKOFF_MAX_WAIT`              | Maximum wait time between retries for the main LLM (e.g., `30s`).                                                                                                                             | No       | 30s                        |

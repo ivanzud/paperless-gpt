@@ -210,18 +210,30 @@ func createOpenAIClient(config Config) (llms.Model, error) {
 
 // createOllamaClient creates a new Ollama vision model client
 func createOllamaClient(config Config) (llms.Model, error) {
-	host := os.Getenv("OLLAMA_HOST")
-	if host == "" {
-		host = "http://127.0.0.1:11434"
-	}
 	opts := []ollama.Option{
 		ollama.WithModel(config.VisionLLMModel),
-		ollama.WithServerURL(host),
+		ollama.WithServerURL(resolveVisionOllamaHost(config)),
 	}
 	if config.OllamaContextLength > 0 {
 		opts = append(opts, ollama.WithRunnerNumCtx(config.OllamaContextLength))
 	}
 	return ollama.New(opts...)
+}
+
+func resolveVisionOllamaHost(config Config) string {
+	if config.VisionLLMHost != "" {
+		return config.VisionLLMHost
+	}
+	if host := os.Getenv("VISION_OLLAMA_HOST"); host != "" {
+		return host
+	}
+	if host := os.Getenv("VISION_LLM_HOST"); host != "" {
+		return host
+	}
+	if host := os.Getenv("OLLAMA_HOST"); host != "" {
+		return host
+	}
+	return "http://127.0.0.1:11434"
 }
 
 // createMistralClient creates a new Mistral vision model client
