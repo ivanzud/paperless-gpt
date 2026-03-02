@@ -504,27 +504,60 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		slices.Sort(finalTagNames)
 		finalTagNames = slices.Compact(finalTagNames)
 
-		log.Debugf("Document %d: Final tag names after compacting: %v", documentID, finalTagNames)
-
-		// NOTE: this will dump the OCR complete tag if it doesn't exist in paperless-ngx
+		// Convert tag names to IDs, with optional auto-creation
 		if !hasSameTags(originalDoc.Tags, finalTagNames) {
-			var finalTagIDs []int
+			originalFields["tags"] = originalDoc.Tags
+
+			// Read setting once for this batch
+			settingsMutex.RLock()
+			autoCreateEnabled := settings.TagsAutoCreate
+			settingsMutex.RUnlock()
+
+			var newTagIDs []int
 			for _, tagName := range finalTagNames {
 				if tagID, exists := availableTags[tagName]; exists {
-					finalTagIDs = append(finalTagIDs, tagID)
+					newTagIDs = append(newTagIDs, tagID)
+				} else {
+					// Check if this is a system tag (always auto-create)
+					isSystemTag := tagName == manualTag || tagName == autoTag ||
+						tagName == autoOcrTag || tagName == pdfOCRCompleteTag
+
+					if isSystemTag || autoCreateEnabled {
+						log.Infof("Creating tag '%s' for document %d", tagName, documentID)
+						tagID, err := client.CreateTag(ctx, tagName)
+						if err != nil {
+							if isSystemTag {
+								// System tags are critical - fatal error
+								return fmt.Errorf("failed to create system tag '%s': %w", tagName, err)
+							} else {
+								// User tag creation failed - fatal error (per requirements)
+								return fmt.Errorf("failed to create tag '%s': %w", tagName, err)
+							}
+						}
+						newTagIDs = append(newTagIDs, tagID)
+						availableTags[tagName] = tagID // Cache for subsequent documents in batch
+						log.Infof("Created tag '%s' with ID %d", tagName, tagID)
+					}
+					// else: Tag doesn't exist and auto-create disabled - silently skip
 				}
 			}
-			// Only update tags if there are remaining tags after changes
-			// Sending an empty tags array causes Paperless-NGX to return an error
-			// However, we need to track this for a potential second update
-			if len(finalTagIDs) > 0 {
-				originalFields["tags"] = originalDoc.Tags
-				updatedFields["tags"] = finalTagIDs
-			} else {
-				// Mark that we need to remove tags but can't do it in this update
-				// We'll handle this after the main update completes
-				originalFields["tags"] = originalDoc.Tags
+
+			// Validation: Prevent empty tag arrays
+			if len(newTagIDs) == 0 {
+				log.Warnf("Document %d: All tags invalid or removed, using fallback tag '%s'",
+					documentID, pdfOCRCompleteTag)
+
+				// Use pdfOCRCompleteTag as fallback
+				if fallbackID, exists := availableTags[pdfOCRCompleteTag]; exists {
+					newTagIDs = []int{fallbackID}
+				} else {
+					// Fallback tag should exist from Phase 1, but handle defensively
+					return fmt.Errorf("document %d: cannot update with empty tags and fallback tag '%s' does not exist",
+						documentID, pdfOCRCompleteTag)
+				}
 			}
+
+			updatedFields["tags"] = newTagIDs
 		}
 
 		// --- CORRESPONDENT ---
@@ -636,17 +669,23 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 						}
 					}
 				}
-				// Mark that we need to remove tags
-				// We'll send the tag update directly (even if empty) since there are no other field changes
-				originalFields["tags"] = originalDoc.Tags
-				if len(finalTagIDs) > 0 {
-					updatedFields["tags"] = finalTagIDs
-				} else {
-					// Document only had auto/manual tags with no other changes
-					// We need to send an empty tags array to remove the manual tag
-					log.Infof("Document %d: Removing manual/auto tag (only tag present, no other changes)", documentID)
-					updatedFields["tags"] = []int{}
+
+				// Validation: Prevent empty tag arrays after system tag removal
+				if len(finalTagIDs) == 0 {
+					log.Infof("Document %d: Only had system tags, using fallback tag '%s'",
+						documentID, pdfOCRCompleteTag)
+
+					if fallbackID, exists := availableTags[pdfOCRCompleteTag]; exists {
+						finalTagIDs = []int{fallbackID}
+					} else {
+						// Should not happen after Phase 1, but handle defensively
+						log.Warnf("Document %d: Fallback tag '%s' does not exist, skipping tag update",
+							documentID, pdfOCRCompleteTag)
+						continue
+					}
 				}
+
+				updatedFields["tags"] = finalTagIDs
 			} else {
 				continue
 			}
@@ -1315,7 +1354,12 @@ func (client *PaperlessClient) GetTaskStatus(ctx context.Context, taskID string)
 	return result, nil
 }
 
-// CreateTag creates a new tag and returns its ID
+// CreateTag creates a new tag in paperless-ngx with the given name.
+// Returns the created tag's ID.
+// Used for:
+// - System tag bootstrap at startup (see ensureSystemTagsExist in main.go)
+// - OCR complete tag creation (see ocr.go)
+// - Optional user tag auto-creation when settings.TagsAutoCreate is enabled
 func (client *PaperlessClient) CreateTag(ctx context.Context, tagName string) (int, error) {
 	type tagRequest struct {
 		Name string `json:"name"`
