@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"image"
 	"os"
-	"paperless-gpt/internal/constants"
 	"strings"
 
 	_ "image/jpeg"
@@ -52,12 +51,12 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 	case "mistral":
 		logger.Debug("Initializing Mistral vision model")
 		model, err = createMistralClient(config)
-	case "tongyi":
-		logger.Debug("Initializing Tongyi vision model")
-		model, err = createTongyiClient(config)
-	case "chatanywhere":
-		logger.Debug("Initializing Chatanywhere vision model")
-		model, err = createChatanywhereClient(config)
+	case "anthropic":
+		logger.Debug("Initializing Anthropic vision model")
+		model, err = createAnthropicClient(config)
+	case "googleai":
+		logger.Debug("Initializing Google AI vision model")
+		model, err = NewGoogleAIProvider(context.Background(), config.VisionLLMModel, config.GoogleAIAPIKey, config.GoogleAIThinkingBudget)
 	default:
 		return nil, fmt.Errorf("unsupported vision LLM provider: %s", config.VisionLLMProvider)
 	}
@@ -117,7 +116,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 	var parts []llms.ContentPart
 	var contentPart llms.ContentPart
 
-	if providerName == "openai" || providerName == "mistral" || providerName == "tongyi" || providerName == "chatanywhere" {
+	if providerName == "openai" || providerName == "mistral" {
 		logger.Info("Using OpenAI image format")
 		contentPart = llms.ImageURLPart("data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(imageContent))
 	} else if providerName == "googleai" {
@@ -200,36 +199,13 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 // createOpenAIClient creates a new OpenAI vision model client
 func createOpenAIClient(config Config) (llms.Model, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
-	baseURL := os.Getenv("OPENAI_BASE_URL")
-	
-	// Use a dummy API key if not set and a base URL is provided (for OpenAI-compatible services)
-	if apiKey == "" && baseURL != "" {
-		apiKey = constants.DummyAPIKey
-	}
-	
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is not set")
 	}
-	
-	options := []openai.Option{
+	return openai.New(
 		openai.WithModel(config.VisionLLMModel),
 		openai.WithToken(apiKey),
-	}
-	
-	// Add base URL if set (for OpenAI-compatible services or Azure)
-	if baseURL != "" {
-		options = append(options, openai.WithBaseURL(baseURL))
-		
-		// Add Azure-specific options if using Azure
-		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
-			options = append(options,
-				openai.WithAPIType(openai.APITypeAzure),
-				openai.WithEmbeddingModel("this-is-not-used"), // This is mandatory for Azure by langchain-go
-			)
-		}
-	}
-	
-	return openai.New(options...)
+	)
 }
 
 // createOllamaClient creates a new Ollama vision model client
@@ -260,40 +236,14 @@ func createMistralClient(config Config) (llms.Model, error) {
 	)
 }
 
-// createTongyiClient creates a new Tongyi vision model client
-// Note: This uses the TongyiProvider from the parent package.
-// We need to import it or define a bridge function in main.go
-func createTongyiClient(config Config) (llms.Model, error) {
-	apiKey := os.Getenv("TONGYI_API_KEY")
-	endpoint := os.Getenv("TONGYI_ENDPOINT")
+// createAnthropicClient creates a new Anthropic vision model client
+func createAnthropicClient(config Config) (llms.Model, error) {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		return nil, fmt.Errorf("Tongyi API key is not set")
+		return nil, fmt.Errorf("Anthropic API key is not set")
 	}
-	if endpoint == "" {
-		endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	}
-	// We can't directly import main.NewTongyiProvider from ocr package due to circular dependency
-	// So we use openai.New with Tongyi's compatible endpoint
-	return openai.New(
-		openai.WithModel(config.VisionLLMModel),
-		openai.WithToken(apiKey),
-		openai.WithBaseURL(endpoint),
-	)
-}
-
-// createChatanywhereClient creates a new Chatanywhere vision model client
-func createChatanywhereClient(config Config) (llms.Model, error) {
-	apiKey := os.Getenv("CHATANYWHERE_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("Chatanywhere API key is not set")
-	}
-	baseURL := os.Getenv("CHATANYWHERE_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.chatanywhere.tech/v1"
-	}
-	return openai.New(
-		openai.WithModel(config.VisionLLMModel),
-		openai.WithToken(apiKey),
-		openai.WithBaseURL(baseURL),
+	return anthropic.New(
+		anthropic.WithModel(config.VisionLLMModel),
+		anthropic.WithToken(apiKey),
 	)
 }

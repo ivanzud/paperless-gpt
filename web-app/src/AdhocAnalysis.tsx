@@ -106,6 +106,7 @@ const AdhocAnalysis: React.FC = () => {
             selectedDocuments={selectedDocuments}
             onSelectDocument={handleSelectDocument}
             gridCols="3"
+            onReload={fetchDocuments}
           />
         )}
       </div>

@@ -85,7 +85,6 @@ type Document struct {
 	OriginalFileName string                `json:"original_file_name"`
 	DocumentTypeName string                `json:"document_type_name"`
 	CustomFields     []CustomFieldResponse `json:"custom_fields"`
-	Notes            []interface{}         `json:"notes"`
 }
 
 // GenerateSuggestionsRequest is the request payload for generating suggestions for /generate-suggestions endpoint
@@ -96,14 +95,20 @@ type GenerateSuggestionsRequest struct {
 	GenerateCorrespondents bool       `json:"generate_correspondents,omitempty"`
 	GenerateCreatedDate    bool       `json:"generate_created_date,omitempty"`
 	GenerateCustomFields   bool       `json:"generate_custom_fields,omitempty"`
-	GenerateSummary        bool       `json:"generate_summary,omitempty"`
+	GenerateDocumentTypes  bool       `json:"generate_document_types,omitempty"`
+}
+
+// AnalyzeDocumentsRequest is the request payload for the ad-hoc analysis
+type AnalyzeDocumentsRequest struct {
+	DocumentIDs []int  `json:"document_ids"`
+	Prompt      string `json:"prompt"`
 }
 
 // Settings defines the structure for server-side UI settings
 type Settings struct {
 	CustomFieldsEnable      bool   `json:"custom_fields_enable"`
 	CustomFieldsSelectedIDs []int  `json:"custom_fields_selected_ids"`
-	CustomFieldsWriteMode   string `json:"custom_fields_write_mode"` // "append", "replace", or "update"
+	CustomFieldsWriteMode   string `json:"custom_fields_write_mode"` // "append" or "replace"
 }
 
 // DocumentSuggestion is the response payload for /generate-suggestions endpoint and the request payload for /update-documents endpoint (as an array)
@@ -117,7 +122,6 @@ type DocumentSuggestion struct {
 	SuggestedCreatedDate   string                  `json:"suggested_created_date,omitempty"`
 	SuggestedDocumentType  string                  `json:"suggested_document_type,omitempty"`
 	SuggestedCustomFields  []CustomFieldSuggestion `json:"suggested_custom_fields,omitempty"`
-	SuggestedSummary       string                  `json:"suggested_summary,omitempty"`
 	KeepOriginalTags       bool                    `json:"keep_original_tags,omitempty"`
 	RemoveTags             []string                `json:"remove_tags,omitempty"`
 	AddTags                []string                `json:"add_tags,omitempty"`
@@ -168,7 +172,6 @@ type ClientInterface interface {
 	UploadDocument(ctx context.Context, data []byte, filename string, metadata map[string]interface{}) (string, error)
 	GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error)
 	DeleteDocument(ctx context.Context, documentID int) error
-	GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error)
 }
 
 // DocumentProcessor defines the interface for processing documents with OCR

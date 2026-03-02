@@ -36,10 +36,6 @@ type PaperlessClient struct {
 	APIToken    string
 	HTTPClient  *http.Client
 	CacheFolder string
-	// Document type caching
-	docTypesOnce sync.Once
-	docTypesByID map[int]string
-	docTypesMu   sync.RWMutex
 }
 
 // CustomField represents a custom field from the Paperless-ngx API
@@ -173,14 +169,10 @@ func (client *PaperlessClient) GetAllTags(ctx context.Context) (map[string]int, 
 		if err != nil {
 			return nil, err
 		}
-		// Read and close the body immediately to avoid holding open too many connections
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
 			return nil, fmt.Errorf("error fetching tags: %d, %s", resp.StatusCode, string(bodyBytes))
 		}
 
@@ -191,7 +183,9 @@ func (client *PaperlessClient) GetAllTags(ctx context.Context) (map[string]int, 
 			} `json:"results"`
 			Next string `json:"next"`
 		}
-		if err := json.Unmarshal(bodyBytes, &tagsResponse); err != nil {
+
+		err = json.NewDecoder(resp.Body).Decode(&tagsResponse)
+		if err != nil {
 			return nil, err
 		}
 
@@ -430,7 +424,17 @@ func (client *PaperlessClient) GetDocument(ctx context.Context, documentID int) 
 	}
 
 	// Get all document types to find the name
-	documentTypeName := client.lookupDocumentTypeName(ctx, documentResponse.DocumentType)
+	allDocumentTypes, err := client.GetAllDocumentTypes(ctx)
+	if err != nil {
+		return Document{}, err
+	}
+	documentTypeName := ""
+	for _, docType := range allDocumentTypes {
+		if documentResponse.DocumentType == docType.ID {
+			documentTypeName = docType.Name
+			break
+		}
+	}
 
 	return Document{
 		ID:               documentResponse.ID,
@@ -442,107 +446,7 @@ func (client *PaperlessClient) GetDocument(ctx context.Context, documentID int) 
 		OriginalFileName: documentResponse.OriginalFileName,
 		CustomFields:     documentResponse.CustomFields,
 		DocumentTypeName: documentTypeName,
-		Notes:            documentResponse.Notes,
 	}, nil
-}
-
-// GetSimilarDocuments retrieves documents that are similar to the specified document
-func (client *PaperlessClient) GetSimilarDocuments(ctx context.Context, documentID int, maxResults int) ([]Document, error) {
-	// Get all tags to find the IDs of paperless-gpt tags to exclude
-	allTags, err := client.GetAllTags(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tags for exclusion: %w", err)
-	}
-
-	// Find the tag IDs for paperless-gpt tags that should be excluded
-	var excludeTagIDs []string
-	for tagName, tagID := range allTags {
-		if tagName == manualTag || tagName == autoTag {
-			excludeTagIDs = append(excludeTagIDs, fmt.Sprintf("%d", tagID))
-		}
-	}
-
-	// Build the query path with tag exclusions
-	path := fmt.Sprintf("api/documents/?ordering=-score&truncate_content=true&more_like_id=%d&page_size=%d", documentID, maxResults)
-	if len(excludeTagIDs) > 0 {
-		path += "&tags__id__none=" + strings.Join(excludeTagIDs, ",")
-	}
-
-	resp, err := client.Do(ctx, "GET", path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed in GetSimilarDocuments: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Read the response body
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.WithFields(logrus.Fields{
-			"status_code": resp.StatusCode,
-			"path":        path,
-			"response":    string(bodyBytes),
-			"headers":     resp.Header,
-		}).Error("Error response from server in GetSimilarDocuments")
-		return nil, fmt.Errorf("error searching similar documents: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var documentsResponse GetDocumentsApiResponse
-	err = json.Unmarshal(bodyBytes, &documentsResponse)
-	if err != nil {
-		log.WithFields(logrus.Fields{
-			"response_body": string(bodyBytes),
-			"error":         err,
-		}).Error("Failed to parse JSON response in GetSimilarDocuments")
-		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
-	}
-
-	allCorrespondents, err := client.GetAllCorrespondents(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	documents := make([]Document, 0, len(documentsResponse.Results))
-	for _, result := range documentsResponse.Results {
-		// Skip the document itself if it appears in the results
-		if result.ID == documentID {
-			continue
-		}
-
-		tagNames := make([]string, len(result.Tags))
-		for i, resultTagID := range result.Tags {
-			for tagName, tagID := range allTags {
-				if resultTagID == tagID {
-					tagNames[i] = tagName
-					break
-				}
-			}
-		}
-
-		correspondentName := ""
-		if result.Correspondent != 0 {
-			for name, id := range allCorrespondents {
-				if result.Correspondent == id {
-					correspondentName = name
-					break
-				}
-			}
-		}
-
-		documents = append(documents, Document{
-			ID:            result.ID,
-			Title:         result.Title,
-			Content:       result.Content,
-			Correspondent: correspondentName,
-			Tags:          tagNames,
-			CreatedDate:   result.CreatedDate,
-		})
-	}
-
-	return documents, nil
 }
 
 // UpdateDocuments updates the specified documents with suggested changes
@@ -571,27 +475,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		documentID := document.ID
 		originalDoc := document.OriginalDocument
 		updatedFields := make(map[string]interface{})
-		newTags := []int{}
-
-		tags := document.SuggestedTags
-		originalTags := document.OriginalDocument.Tags
-
-		originalTagsJSON, err := json.Marshal(originalTags)
-		if err != nil {
-			log.Errorf("Error marshalling JSON for document %d: %v", documentID, err)
-			return err
-		}
-
-		// remove autoTag to prevent infinite loop (even if it is in the original tags)
-		for _, tag := range document.RemoveTags {
-			originalTags = removeTagFromList(originalTags, tag)
-		}
-
-		if len(tags) == 0 {
-			tags = originalTags
-		} else {
-			// We have suggested tags to change
-			originalFields["tags"] = originalTags
+		originalFields := make(map[string]interface{})
 
 		// --- TAGS ---
 		finalTagNames := originalDoc.Tags
@@ -620,54 +504,27 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		slices.Sort(finalTagNames)
 		finalTagNames = slices.Compact(finalTagNames)
 
-		// Convert tag names to IDs, with optional auto-creation
+		log.Debugf("Document %d: Final tag names after compacting: %v", documentID, finalTagNames)
+
+		// NOTE: this will dump the OCR complete tag if it doesn't exist in paperless-ngx
 		if !hasSameTags(originalDoc.Tags, finalTagNames) {
-			originalFields["tags"] = originalDoc.Tags
-			var newTagIDs []int = []int{}
+			var finalTagIDs []int
 			for _, tagName := range finalTagNames {
 				if tagID, exists := availableTags[tagName]; exists {
-					newTagIDs = append(newTagIDs, tagID)
-				} else {
-					// Check if this is a system tag (always auto-create)
-					isSystemTag := tagName == manualTag || tagName == autoTag ||
-						tagName == autoOcrTag || tagName == pdfOCRCompleteTag
-
-					if isSystemTag || autoCreateEnabled {
-						log.Infof("Creating tag '%s' for document %d", tagName, documentID)
-						tagID, err := client.CreateTag(ctx, tagName)
-						if err != nil {
-							if isSystemTag {
-								// System tags are critical - fatal error
-								return fmt.Errorf("failed to create system tag '%s': %w", tagName, err)
-							} else {
-								// User tag creation failed - fatal error (per requirements)
-								return fmt.Errorf("failed to create tag '%s': %w", tagName, err)
-							}
-						}
-						newTagIDs = append(newTagIDs, tagID)
-						availableTags[tagName] = tagID // Cache for subsequent documents in batch
-						log.Infof("Created tag '%s' with ID %d", tagName, tagID)
-					}
-					// else: Tag doesn't exist and auto-create disabled - silently skip
+					finalTagIDs = append(finalTagIDs, tagID)
 				}
 			}
-
-			// Validation: Prevent empty tag arrays
-			if len(newTagIDs) == 0 {
-				log.Warnf("Document %d: All tags invalid or removed, using fallback tag '%s'",
-					documentID, pdfOCRCompleteTag)
-
-				// Use pdfOCRCompleteTag as fallback
-				if fallbackID, exists := availableTags[pdfOCRCompleteTag]; exists {
-					newTagIDs = []int{fallbackID}
-				} else {
-					// Fallback tag should exist from Phase 1, but handle defensively
-					return fmt.Errorf("document %d: cannot update with empty tags and fallback tag '%s' does not exist",
-						documentID, pdfOCRCompleteTag)
-				}
+			// Only update tags if there are remaining tags after changes
+			// Sending an empty tags array causes Paperless-NGX to return an error
+			// However, we need to track this for a potential second update
+			if len(finalTagIDs) > 0 {
+				originalFields["tags"] = originalDoc.Tags
+				updatedFields["tags"] = finalTagIDs
+			} else {
+				// Mark that we need to remove tags but can't do it in this update
+				// We'll handle this after the main update completes
+				originalFields["tags"] = originalDoc.Tags
 			}
-
-			updatedFields["tags"] = newTagIDs
 		}
 
 		// --- CORRESPONDENT ---
@@ -724,19 +581,6 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			updatedFields["content"] = document.SuggestedContent
 		}
 
-		// --- SUMMARY (NOTES) ---
-		if document.SuggestedSummary != "" {
-			// Append the summary to existing notes
-			finalNotes := slices.Clone(originalDoc.Notes)
-			finalNotes = append(finalNotes, document.SuggestedSummary)
-			originalNotesJSON, _ := json.Marshal(originalDoc.Notes)
-			finalNotesJSON, _ := json.Marshal(finalNotes)
-			if string(originalNotesJSON) != string(finalNotesJSON) {
-				originalFields["notes"] = string(originalNotesJSON)
-				updatedFields["notes"] = finalNotes
-			}
-		}
-
 		// --- CUSTOM FIELDS ---
 		if len(document.SuggestedCustomFields) > 0 {
 			log.Infof("Processing custom fields for document %d with mode: '%s'", documentID, document.CustomFieldsWriteMode)
@@ -762,18 +606,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					}
 				}
 			case "append":
-				// Build index of existing fields to allow filling empty values
-				idxByField := make(map[int]int, len(finalCustomFields))
-				for i, f := range finalCustomFields {
-					idxByField[f.Field] = i
+				existingFieldsMap := make(map[int]bool)
+				for _, f := range finalCustomFields {
+					existingFieldsMap[f.Field] = true
 				}
 				for _, sf := range document.SuggestedCustomFields {
-					if i, ok := idxByField[sf.ID]; ok {
-						// Only fill if existing value is empty
-						if isEmptyCustomFieldValue(finalCustomFields[i].Value) {
-							finalCustomFields[i].Value = sf.Value
-						}
-					} else {
+					if _, exists := existingFieldsMap[sf.ID]; !exists {
 						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
 					}
 				}
@@ -798,23 +636,17 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 						}
 					}
 				}
-
-				// Validation: Prevent empty tag arrays after system tag removal
-				if len(finalTagIDs) == 0 {
-					log.Infof("Document %d: Only had system tags, using fallback tag '%s'",
-						documentID, pdfOCRCompleteTag)
-
-					if fallbackID, exists := availableTags[pdfOCRCompleteTag]; exists {
-						finalTagIDs = []int{fallbackID}
-					} else {
-						// Should not happen after Phase 1, but handle defensively
-						log.Warnf("Document %d: Fallback tag '%s' does not exist, skipping tag update",
-							documentID, pdfOCRCompleteTag)
-						continue
-					}
+				// Mark that we need to remove tags
+				// We'll send the tag update directly (even if empty) since there are no other field changes
+				originalFields["tags"] = originalDoc.Tags
+				if len(finalTagIDs) > 0 {
+					updatedFields["tags"] = finalTagIDs
+				} else {
+					// Document only had auto/manual tags with no other changes
+					// We need to send an empty tags array to remove the manual tag
+					log.Infof("Document %d: Removing manual/auto tag (only tag present, no other changes)", documentID)
+					updatedFields["tags"] = []int{}
 				}
-
-				updatedFields["tags"] = finalTagIDs
 			} else {
 				continue
 			}
@@ -1283,7 +1115,7 @@ func urlEncode(s string) string {
 func instantiateCorrespondent(name string) Correspondent {
 	return Correspondent{
 		Name:              name,
-		MatchingAlgorithm: 1,
+		MatchingAlgorithm: 0,
 		Match:             "",
 		IsInsensitive:     true,
 		Owner:             nil,
@@ -1411,14 +1243,10 @@ func (client *PaperlessClient) GetCustomFields(ctx context.Context) ([]CustomFie
 		if err != nil {
 			return nil, err
 		}
-		// Read and close the body immediately to avoid holding open too many connections
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
 			return nil, fmt.Errorf("error fetching custom fields: %d, %s", resp.StatusCode, string(bodyBytes))
 		}
 
@@ -1426,7 +1254,9 @@ func (client *PaperlessClient) GetCustomFields(ctx context.Context) ([]CustomFie
 			Results []CustomField `json:"results"`
 			Next    string        `json:"next"`
 		}
-		if err := json.Unmarshal(bodyBytes, &response); err != nil {
+
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		if err != nil {
 			return nil, err
 		}
 
@@ -1444,50 +1274,6 @@ func (client *PaperlessClient) GetCustomFields(ctx context.Context) ([]CustomFie
 	}
 
 	return customFields, nil
-}
-
-// isEmptyCustomFieldValue reports whether a value should be considered "empty" for append semantics.
-func isEmptyCustomFieldValue(v interface{}) bool {
-	if v == nil {
-		return true
-	}
-	switch t := v.(type) {
-	case string:
-		return strings.TrimSpace(t) == ""
-	case []interface{}:
-		return len(t) == 0
-	case map[string]interface{}:
-		return len(t) == 0
-	default:
-		// Numbers/booleans: treat as non-empty because 0/false can be intentional
-		return false
-	}
-}
-
-// initDocTypesCache initializes the document types cache using sync.Once
-func (client *PaperlessClient) initDocTypesCache(ctx context.Context) {
-	client.docTypesOnce.Do(func() {
-		if types, err := client.GetAllDocumentTypes(ctx); err == nil {
-			m := make(map[int]string, len(types))
-			for _, t := range types {
-				m[t.ID] = t.Name
-			}
-			client.docTypesMu.Lock()
-			client.docTypesByID = m
-			client.docTypesMu.Unlock()
-		} else {
-			log.Warnf("Failed to warm document-types cache: %v", err)
-		}
-	})
-}
-
-// lookupDocumentTypeName returns the document type name for the given ID using cached data
-func (client *PaperlessClient) lookupDocumentTypeName(ctx context.Context, id int) string {
-	client.initDocTypesCache(ctx)
-	client.docTypesMu.RLock()
-	name := client.docTypesByID[id]
-	client.docTypesMu.RUnlock()
-	return name
 }
 
 // DeleteDocument deletes a document by its ID
@@ -1529,12 +1315,7 @@ func (client *PaperlessClient) GetTaskStatus(ctx context.Context, taskID string)
 	return result, nil
 }
 
-// CreateTag creates a new tag in paperless-ngx with the given name.
-// Returns the created tag's ID.
-// Used for:
-// - System tag bootstrap at startup (see ensureSystemTagsExist in main.go)
-// - OCR complete tag creation (see ocr.go)
-// - Optional user tag auto-creation when settings.TagsAutoCreate is enabled
+// CreateTag creates a new tag and returns its ID
 func (client *PaperlessClient) CreateTag(ctx context.Context, tagName string) (int, error) {
 	type tagRequest struct {
 		Name string `json:"name"`

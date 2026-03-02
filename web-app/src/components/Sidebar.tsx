@@ -72,9 +72,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectPage }) => {
       </div>
       <ul className="menu-items">
         {menuItems.map((item) => (
+          (() => {
+            const currentPathParts = location.pathname.split("/");
+            const itemPathParts = item.path.split("/");
+            const currentPathTail = currentPathParts[currentPathParts.length - 1];
+            const itemPathTail = itemPathParts[itemPathParts.length - 1];
+            return (
           <li
             key={item.name}
-            className={location.pathname.split('/').at(-1) === item.path.split('/').at(-1) ? "active" : ""}
+            className={currentPathTail === itemPathTail ? "active" : ""}
             onClick={() => handlePageClick(item.name)}
           >
             <Link
@@ -90,6 +96,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectPage }) => {
               {!collapsed && <span className="ml-2">{item.title}</span>}
             </Link>
           </li>
+            );
+          })()
         ))}
       </ul>
     </div>

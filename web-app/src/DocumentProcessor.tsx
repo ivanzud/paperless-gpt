@@ -3,7 +3,6 @@ import React, { useCallback, useEffect, useState } from "react";
 import "react-tag-autocomplete/example/src/styles.css"; // Ensure styles are loaded
 import DocumentsToProcess from "./components/DocumentsToProcess";
 import NoDocuments from "./components/NoDocuments";
-import ArrowPathIcon from "@heroicons/react/24/outline/ArrowPathIcon";
 import SuccessModal from "./components/SuccessModal";
 import SuggestionsReview from "./components/SuggestionsReview";
 
@@ -72,7 +71,7 @@ const DocumentProcessor: React.FC = () => {
   const [generateTitles, setGenerateTitles] = useState(true);
   const [generateTags, setGenerateTags] = useState(true);
   const [generateCorrespondents, setGenerateCorrespondents] = useState(true);
-  const [generateDocumentTypes, setGenerateDocumentTypes] = useState(true);
+  const [generateDocumentTypes] = useState(true);
   const [generateCreatedDate, setGenerateCreatedDate] = useState(true);
   const [generateCustomFields, setGenerateCustomFields] = useState(true);
   const [generateSummary, setGenerateSummary] = useState(true);
