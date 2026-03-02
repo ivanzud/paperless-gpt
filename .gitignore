@@ -13,13 +13,3 @@ web-app/test-results
 dist/
 *.tsbuildinfo
 paperless-gpt
-web-app/e2e/test-results
-
-# Deployment and migration files
-*.tar
-*.tar.gz
-migration-package/
-*-debug.log
-check-server-data.sh
-deploy-*.sh
-prepare-migration.sh
