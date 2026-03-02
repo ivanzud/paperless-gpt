@@ -571,7 +571,27 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		documentID := document.ID
 		originalDoc := document.OriginalDocument
 		updatedFields := make(map[string]interface{})
-		originalFields := make(map[string]interface{})
+		newTags := []int{}
+
+		tags := document.SuggestedTags
+		originalTags := document.OriginalDocument.Tags
+
+		originalTagsJSON, err := json.Marshal(originalTags)
+		if err != nil {
+			log.Errorf("Error marshalling JSON for document %d: %v", documentID, err)
+			return err
+		}
+
+		// remove autoTag to prevent infinite loop (even if it is in the original tags)
+		for _, tag := range document.RemoveTags {
+			originalTags = removeTagFromList(originalTags, tag)
+		}
+
+		if len(tags) == 0 {
+			tags = originalTags
+		} else {
+			// We have suggested tags to change
+			originalFields["tags"] = originalTags
 
 		// --- TAGS ---
 		finalTagNames := originalDoc.Tags
