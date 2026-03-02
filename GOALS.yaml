@@ -1,0 +1,8 @@
+version: 3
+goals:
+  - id: wave1-burn-down-ollama
+    description: Keep active wave-1 issues at or below 6 while focusing on Ollama/OCR.
+    weight: 9
+    check: >
+      gh issue list -R ivanzud/paperless-gpt --state open --label wave-1 --limit 200 --json number --template '{{len .}}'
+      | awk '{exit !($1 <= 6)}'
