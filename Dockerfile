@@ -63,7 +63,7 @@ RUN CGO_ENABLED=1 go build -tags musl -o /dev/null github.com/mattn/go-sqlite3
 COPY --from=frontend /app/dist /app/web-app/dist
 
 # Copy the Go source files
-COPY *.go .
+COPY *.go ./
 COPY internal ./internal
 COPY ocr ./ocr
 
