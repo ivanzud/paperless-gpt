@@ -12,3 +12,7 @@ dist/
 *.tsbuildinfo
 paperless-gpt
 web-app/e2e/test-results
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
