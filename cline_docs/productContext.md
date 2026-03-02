@@ -1,57 +1,78 @@
 # Product Context
 
 ## Project Purpose
-paperless-gpt is an AI-powered companion application designed to enhance the document management capabilities of paperless-ngx by automating document organization tasks through advanced AI technologies.
+paperless-gpt is designed to enhance document management by integrating AI capabilities with paperless-ngx. Its primary purpose is to automate and improve the accuracy of document processing tasks that traditionally require manual intervention.
 
 ## Problems Solved
 1. Manual Document Organization
-   - Eliminates time-consuming manual tagging and title creation
-   - Reduces human error in document categorization
-   - Streamlines document processing workflow
+   - Eliminates tedious manual tagging and titling
+   - Reduces time spent on document categorization
+   - Minimizes human error in classification
 
-2. OCR Quality
+2. OCR Quality Issues
    - Improves text extraction from poor quality scans
-   - Provides context-aware OCR capabilities
-   - Handles complex document layouts better than traditional OCR
+   - Enhances accuracy through LLM-based OCR
+   - Provides context-aware text interpretation
 
-3. Document Categorization
+3. Document Processing Automation
    - Automates correspondent identification
-   - Provides intelligent tag suggestions
-   - Generates meaningful document titles
+   - Streamlines document categorization
+   - Enables bulk processing capabilities
 
 ## Core Functionality
+1. AI-Powered Document Processing
+   - Title generation using LLMs
+   - Intelligent tag suggestions
+   - Automated correspondent detection
+   - Enhanced OCR capabilities
 
-### 1. LLM-Enhanced OCR
-- Uses Large Language Models for better text extraction
-- Handles messy or low-quality scans effectively
-- Provides context-aware text interpretation
+2. Integration Features
+   - Seamless paperless-ngx integration
+   - Support for multiple LLM providers
+   - Docker-based deployment
+   - Customizable prompt templates
 
-### 2. Automatic Document Processing
-- Title Generation: Creates descriptive titles based on content
-- Tag Generation: Suggests relevant tags from existing tag set
-- Correspondent Identification: Automatically detects document senders/recipients
+3. User Experience
+   - Web-based interface
+   - Manual review capabilities
+   - Automatic processing options
+   - Flexible configuration options
 
-### 3. Integration Features
-- Seamless paperless-ngx integration
-- Docker-based deployment
-- Customizable prompt templates
-- Support for multiple LLM providers (OpenAI, Ollama)
+## Success Criteria
+1. Accuracy Metrics
+   - High-quality OCR results
+   - Accurate document classification
+   - Relevant tag suggestions
+   - Correct correspondent identification
 
-### 4. User Interface
-- Web-based management interface
-- Manual review capabilities
-- Batch processing support
-- Auto-processing workflow option
+2. Performance Goals
+   - Fast processing times
+   - Reliable system operation
+   - Scalable document handling
+   - Efficient resource usage
 
-## Usage Flow
-1. Documents are tagged with specific markers (e.g., 'paperless-gpt')
-2. System processes documents using AI/LLM capabilities
-3. Results can be automatically applied or manually reviewed
-4. Processed documents are updated in paperless-ngx
+3. User Satisfaction
+   - Intuitive interface
+   - Clear feedback mechanisms
+   - Minimal manual intervention
+   - Consistent results
 
-## Configuration Options
-- Manual vs. automatic processing
-- LLM provider selection
-- Language preferences
-- Processing limits and constraints
-- Custom prompt templates
+## Future Vision
+1. Enhanced Capabilities
+   - Support for more AI providers
+   - Statistics and analytics features
+   - Advanced document analysis
+   - Improved processing algorithms
+   - Extended automation options
+
+2. Community Growth
+   - Active contributor base
+   - Regular feature additions
+   - Strong documentation
+   - Responsive maintenance
+
+3. Technical Evolution
+   - Improved architecture
+   - Enhanced performance
+   - Extended integrations
+   - Robust testing
