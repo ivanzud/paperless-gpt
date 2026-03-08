@@ -19,6 +19,7 @@ import (
 	"github.com/tmc/langchaingo/llms/mistral"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/llms/openai"
+	"paperless-gpt/sanitize"
 )
 
 // LLMProvider implements OCR using LLM vision models
@@ -136,7 +137,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 
 	parts = []llms.ContentPart{
 		contentPart,
-		llms.TextPart(p.prompt),
+		llms.TextPart(sanitize.Sanitize(p.prompt)),
 	}
 
 	var callOpts []llms.CallOption

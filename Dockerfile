@@ -66,6 +66,7 @@ COPY --from=frontend /app/dist /app/web-app/dist
 COPY *.go ./
 COPY internal ./internal
 COPY ocr ./ocr
+COPY sanitize ./sanitize
 
 # Import ARGs from top level
 ARG VERSION
