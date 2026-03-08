@@ -95,6 +95,7 @@ var (
 	documentTypeTemplate  *template.Template
 	createdDateTemplate   *template.Template
 	customFieldTemplate   *template.Template
+	summaryTemplate       *template.Template
 	ocrTemplate           *template.Template
 	adhocAnalysisTemplate *template.Template
 	templateMutex         sync.RWMutex
@@ -896,6 +897,10 @@ func loadTemplates() error {
 	if err != nil {
 		return err
 	}
+	summaryTemplate, err = loadTemplate("summary_prompt.tmpl")
+	if err != nil {
+		return err
+	}
 	ocrTemplate, err = loadTemplate("ocr_prompt.tmpl")
 	if err != nil {
 		return err
@@ -969,18 +974,20 @@ func createLLM() (llms.Model, error) {
 		// Apply rate limiting with isVision=false
 		return NewRateLimitedLLM(llm, getRateLimitConfig(false)), nil
 	case "openai":
-		if openaiAPIKey == "" {
-			return nil, fmt.Errorf("OpenAI API key is not set")
+		baseURL := os.Getenv("OPENAI_BASE_URL")
+		isAzure := strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure"
+		apiToken, err := resolveOpenAIToken(openaiAPIKey, baseURL, isAzure)
+		if err != nil {
+			return nil, err
 		}
 
 		options := []openai.Option{
 			openai.WithModel(llmModel),
-			openai.WithToken(openaiAPIKey),
+			openai.WithToken(apiToken),
 			openai.WithHTTPClient(createCustomHTTPClient()),
 		}
 
-		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
-			baseURL := os.Getenv("OPENAI_BASE_URL")
+		if isAzure {
 			if baseURL == "" {
 				return nil, fmt.Errorf("OPENAI_BASE_URL is required for Azure OpenAI")
 			}
@@ -989,6 +996,8 @@ func createLLM() (llms.Model, error) {
 				openai.WithBaseURL(baseURL),
 				openai.WithEmbeddingModel("this-is-not-used"), // This is mandatory for Azure by langchain-go
 			)
+		} else if baseURL != "" {
+			options = append(options, openai.WithBaseURL(baseURL))
 		}
 
 		llm, err := openai.New(options...)
@@ -1077,18 +1086,20 @@ func createVisionLLM() (llms.Model, error) {
 		// Apply rate limiting with isVision=true
 		return NewRateLimitedLLM(llm, getRateLimitConfig(true)), nil
 	case "openai":
-		if openaiAPIKey == "" {
-			return nil, fmt.Errorf("OpenAI API key is not set")
+		baseURL := os.Getenv("OPENAI_BASE_URL")
+		isAzure := strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure"
+		apiToken, err := resolveOpenAIToken(openaiAPIKey, baseURL, isAzure)
+		if err != nil {
+			return nil, err
 		}
 
 		options := []openai.Option{
 			openai.WithModel(visionLlmModel),
-			openai.WithToken(openaiAPIKey),
+			openai.WithToken(apiToken),
 			openai.WithHTTPClient(createCustomHTTPClient()),
 		}
 
-		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
-			baseURL := os.Getenv("OPENAI_BASE_URL")
+		if isAzure {
 			if baseURL == "" {
 				return nil, fmt.Errorf("OPENAI_BASE_URL is required for Azure OpenAI")
 			}
@@ -1097,6 +1108,8 @@ func createVisionLLM() (llms.Model, error) {
 				openai.WithBaseURL(baseURL),
 				openai.WithEmbeddingModel("this-is-not-used"), // This is mandatory for Azure by langchain-go
 			)
+		} else if baseURL != "" {
+			options = append(options, openai.WithBaseURL(baseURL))
 		}
 
 		llm, err := openai.New(options...)
@@ -1152,6 +1165,19 @@ func createVisionLLM() (llms.Model, error) {
 		log.Infoln("Vision LLM not enabled")
 		return nil, nil
 	}
+}
+
+func resolveOpenAIToken(apiKey string, baseURL string, requireAPIKey bool) (string, error) {
+	if apiKey != "" {
+		return apiKey, nil
+	}
+	if requireAPIKey {
+		return "", fmt.Errorf("OpenAI API key is not set")
+	}
+	if strings.TrimSpace(baseURL) != "" {
+		return "local-key", nil
+	}
+	return "", fmt.Errorf("OpenAI API key is not set")
 }
 
 func resolveVisionOllamaHost() string {

@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/disintegration/imaging"
 	"github.com/gen2brain/go-fitz"
@@ -147,6 +148,30 @@ func parseSelectOptionsFromValidationMessages(messages []string) map[string]stri
 	return options
 }
 
+func getPaperlessHTTPTimeout() time.Duration {
+	const defaultTimeout = 5 * time.Minute
+
+	raw := strings.TrimSpace(os.Getenv("PAPERLESS_HTTP_TIMEOUT"))
+	if raw == "" {
+		return defaultTimeout
+	}
+	if raw == "0" {
+		return 0
+	}
+
+	timeout, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Warnf("Invalid PAPERLESS_HTTP_TIMEOUT value %q, using default %s", raw, defaultTimeout)
+		return defaultTimeout
+	}
+	if timeout < 0 {
+		log.Warnf("Negative PAPERLESS_HTTP_TIMEOUT value %q is invalid, using default %s", raw, defaultTimeout)
+		return defaultTimeout
+	}
+
+	return timeout
+}
+
 // NewPaperlessClient creates a new instance of PaperlessClient with a default HTTP client
 func NewPaperlessClient(baseURL, apiToken string) *PaperlessClient {
 	cacheFolder := os.Getenv("PAPERLESS_GPT_CACHE_DIR")
@@ -157,7 +182,10 @@ func NewPaperlessClient(baseURL, apiToken string) *PaperlessClient {
 			InsecureSkipVerify: paperlessInsecureSkipVerify,
 		},
 	}
-	httpClient := &http.Client{Transport: tr}
+	httpClient := &http.Client{
+		Transport: tr,
+		Timeout:   getPaperlessHTTPTimeout(),
+	}
 
 	return &PaperlessClient{
 		BaseURL:     strings.TrimRight(baseURL, "/"),
@@ -404,6 +432,57 @@ func (client *PaperlessClient) GetDocumentsByTag(ctx context.Context, tag string
 			Correspondent: correspondentName,
 			Tags:          tagNames,
 			CreatedDate:   result.CreatedDate,
+		})
+	}
+
+	return documents, nil
+}
+
+// GetSimilarDocuments retrieves documents similar to the given document, excluding paperless-gpt workflow tags.
+func (client *PaperlessClient) GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error) {
+	availableTags, err := client.GetAllTags(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tags for exclusion: %w", err)
+	}
+
+	var excludedTagIDs []string
+	for _, tagName := range []string{manualTag, autoTag, autoOcrTag, pdfOCRCompleteTag} {
+		if tagName == "" {
+			continue
+		}
+		if tagID, exists := availableTags[tagName]; exists {
+			excludedTagIDs = append(excludedTagIDs, strconv.Itoa(tagID))
+		}
+	}
+
+	path := fmt.Sprintf("api/documents/?more_like_id=%d&page_size=%d&ordering=-score&truncate_content=true", documentID, count)
+	if len(excludedTagIDs) > 0 {
+		path += "&tags__id__none=" + strings.Join(excludedTagIDs, ",")
+	}
+
+	resp, err := client.Do(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error searching similar documents: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("error searching similar documents: %d, %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var response GetDocumentsApiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to parse similar documents response: %w", err)
+	}
+
+	documents := make([]Document, 0, len(response.Results))
+	for _, result := range response.Results {
+		documents = append(documents, Document{
+			ID:          result.ID,
+			Title:       result.Title,
+			Content:     result.Content,
+			CreatedDate: result.CreatedDate,
 		})
 	}
 
@@ -853,10 +932,10 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				}
 			}
 			if field == "content" {
-			log.Debugf("Document %d: Updated %s from %v to %v", documentID, field, value, updatedFields[field])
-		} else {
-			log.Printf("Document %d: Updated %s from %v to %v", documentID, field, value, updatedFields[field])
-		}
+				log.Debugf("Document %d: Updated %s from %v to %v", documentID, field, value, updatedFields[field])
+			} else {
+				log.Printf("Document %d: Updated %s from %v to %v", documentID, field, value, updatedFields[field])
+			}
 			mod := ModificationHistory{
 				DocumentID:    uint(documentID),
 				ModField:      field,
@@ -1232,7 +1311,7 @@ func urlEncode(s string) string {
 func instantiateCorrespondent(name string) Correspondent {
 	return Correspondent{
 		Name:              name,
-		MatchingAlgorithm: 0,
+		MatchingAlgorithm: 1,
 		Match:             "",
 		IsInsensitive:     true,
 		Owner:             nil,

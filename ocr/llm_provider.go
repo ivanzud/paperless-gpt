@@ -219,13 +219,24 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 // createOpenAIClient creates a new OpenAI vision model client
 func createOpenAIClient(config Config) (llms.Model, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if apiKey == "" && baseURL == "" {
 		return nil, fmt.Errorf("OpenAI API key is not set")
 	}
-	return openai.New(
+
+	if apiKey == "" {
+		apiKey = "local-key"
+	}
+
+	options := []openai.Option{
 		openai.WithModel(config.VisionLLMModel),
 		openai.WithToken(apiKey),
-	)
+	}
+	if baseURL != "" {
+		options = append(options, openai.WithBaseURL(baseURL))
+	}
+
+	return openai.New(options...)
 }
 
 // createOllamaClient creates a new Ollama vision model client

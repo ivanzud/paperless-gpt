@@ -244,17 +244,33 @@ func (app *App) getSuggestedDocumentType(
 }
 
 // getSuggestedTitle generates a suggested title for a document using the LLM
-func (app *App) getSuggestedTitle(ctx context.Context, content string, originalTitle string, logger *logrus.Entry) (string, error) {
+func (app *App) getSuggestedTitle(ctx context.Context, documentID int, content string, originalTitle string, logger *logrus.Entry) (string, error) {
 	likelyLanguage := getLikelyLanguage()
 
 	templateMutex.RLock()
 	defer templateMutex.RUnlock()
 
+	var similarDocumentTitles []string
+	if app.Client != nil && documentID > 0 {
+		similarDocuments, err := app.Client.GetSimilarDocuments(ctx, documentID, 5)
+		if err != nil {
+			logger.WithError(err).Debug("Failed to fetch similar documents for title generation")
+		} else {
+			for _, doc := range similarDocuments {
+				title := strings.TrimSpace(doc.Title)
+				if title != "" {
+					similarDocumentTitles = append(similarDocumentTitles, title)
+				}
+			}
+		}
+	}
+
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language": likelyLanguage,
-		"Content":  content,
-		"Title":    originalTitle,
+		"Language":              likelyLanguage,
+		"Content":               content,
+		"Title":                 originalTitle,
+		"SimilarDocumentTitles": similarDocumentTitles,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(titleTemplate, templateData)
@@ -337,6 +353,57 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, log
 
 	prompt := promptBuffer.String()
 	logger.Debugf("CreatedDate suggestion prompt: %s", prompt)
+
+	completion, err := app.LLM.GenerateContent(ctx, []llms.MessageContent{
+		{
+			Parts: []llms.ContentPart{
+				llms.TextContent{
+					Text: prompt,
+				},
+			},
+			Role: llms.ChatMessageTypeHuman,
+		},
+	}, mainLLMCallOptions()...)
+	if err != nil {
+		return "", fmt.Errorf("error getting response from LLM: %v", err)
+	}
+	result := textsanitize.StripReasoning(completion.Choices[0].Content)
+	return strings.TrimSpace(strings.Trim(result, "\"")), nil
+}
+
+// getSuggestedSummary generates a suggested summary for a document using the LLM.
+func (app *App) getSuggestedSummary(ctx context.Context, content string, title string, logger *logrus.Entry) (string, error) {
+	likelyLanguage := getLikelyLanguage()
+
+	templateMutex.RLock()
+	defer templateMutex.RUnlock()
+
+	templateData := map[string]interface{}{
+		"Language": likelyLanguage,
+		"Title":    title,
+	}
+
+	availableTokens, err := getAvailableTokensForContent(summaryTemplate, templateData)
+	if err != nil {
+		logger.Errorf("Error calculating available tokens: %v", err)
+		return "", fmt.Errorf("error calculating available tokens: %v", err)
+	}
+
+	truncatedContent, err := truncateContentByTokens(content, availableTokens)
+	if err != nil {
+		logger.Errorf("Error truncating content: %v", err)
+		return "", fmt.Errorf("error truncating content: %v", err)
+	}
+
+	var promptBuffer bytes.Buffer
+	templateData["Content"] = truncatedContent
+	err = summaryTemplate.Execute(&promptBuffer, templateData)
+	if err != nil {
+		return "", fmt.Errorf("error executing summary template: %v", err)
+	}
+
+	prompt := promptBuffer.String()
+	logger.Debugf("Summary suggestion prompt: %s", prompt)
 
 	completion, err := app.LLM.GenerateContent(ctx, []llms.MessageContent{
 		{
@@ -538,9 +605,10 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 			var suggestedDocumentType string
 			var suggestedCreatedDate string
 			var suggestedCustomFields []CustomFieldSuggestion
+			var suggestedSummary string
 
 			if suggestionRequest.GenerateTitles {
-				suggestedTitle, err = app.getSuggestedTitle(ctx, content, suggestedTitle, docLogger)
+				suggestedTitle, err = app.getSuggestedTitle(ctx, doc.ID, content, suggestedTitle, docLogger)
 				if err != nil {
 					mu.Lock()
 					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
@@ -617,6 +685,17 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 				}
 			}
 
+			if suggestionRequest.GenerateSummary {
+				suggestedSummary, err = app.getSuggestedSummary(ctx, content, suggestedTitle, docLogger)
+				if err != nil {
+					mu.Lock()
+					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
+					mu.Unlock()
+					log.Errorf("Error generating summary for document %d: %v", documentID, err)
+					return
+				}
+			}
+
 			mu.Lock()
 			suggestion := DocumentSuggestion{
 				ID:               documentID,
@@ -670,6 +749,11 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 			if suggestionRequest.GenerateCustomFields {
 				log.Printf("Suggested custom fields for document %d: %v", documentID, suggestedCustomFields)
 				suggestion.SuggestedCustomFields = suggestedCustomFields
+			}
+
+			if suggestionRequest.GenerateSummary {
+				log.Printf("Suggested summary for document %d: %s", documentID, suggestedSummary)
+				suggestion.SuggestedSummary = suggestedSummary
 			}
 
 			// Remove manual tag from the list of suggested tags

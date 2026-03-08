@@ -16,6 +16,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const ocrPageResultSaveTimeout = 5 * time.Second
+
 // ProcessedDocument represents a document after OCR processing
 type ProcessedDocument struct {
 	ID               int
@@ -39,6 +41,27 @@ type HOCRCapable interface {
 
 	// ResetHOCR clears any stored hOCR data
 	ResetHOCR()
+}
+
+func shouldFallbackWholePDF(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return (strings.Contains(msg, "page") && strings.Contains(msg, "limit")) ||
+		strings.Contains(msg, "too many pages") ||
+		strings.Contains(msg, "maximum number of pages") ||
+		strings.Contains(msg, "maximum pages") ||
+		strings.Contains(msg, "supports up to") ||
+		strings.Contains(msg, "payload too large") ||
+		strings.Contains(msg, "request entity too large") ||
+		strings.Contains(msg, "document too large") ||
+		strings.Contains(msg, "file too large") ||
+		strings.Contains(msg, "status 413") ||
+		strings.Contains(msg, "status: 413") ||
+		strings.Contains(msg, "status code 413") ||
+		strings.Contains(msg, "exceeds the limit")
 }
 
 // ProcessDocumentOCR processes a document through OCR and returns the combined text, hOCR and PDF
@@ -173,6 +196,12 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		// Process the whole PDF in one go
 		result, err := provider.ProcessImage(ctx, originalPDFData, 0) // Page 0 indicates entire document
 		if err != nil {
+			if shouldFallbackWholePDF(err) {
+				docLogger.WithError(err).WithField("fallback_process_mode", "pdf").Warn("Whole-PDF OCR hit a provider limit, retrying in per-page PDF mode")
+				fallbackOptions := options
+				fallbackOptions.ProcessMode = "pdf"
+				return app.ProcessDocumentOCR(ctx, documentID, fallbackOptions, jobID)
+			}
 			return nil, fmt.Errorf("error performing OCR for document %d: %w", documentID, err)
 		}
 
@@ -326,7 +355,9 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 				}
 			}
 
-			saveErr := SaveSingleOcrPageResult(app.Database, documentID, i, result.Text, result.OcrLimitHit, genInfoJSON)
+			saveCtx, cancel := context.WithTimeout(ctx, ocrPageResultSaveTimeout)
+			saveErr := SaveSingleOcrPageResultWithContext(saveCtx, app.Database, documentID, i, result.Text, result.OcrLimitHit, genInfoJSON)
+			cancel()
 			if saveErr != nil {
 				pageLogger.WithError(saveErr).Error("Failed to save OCR page result to database")
 				// Continue processing other pages even if saving fails for one
