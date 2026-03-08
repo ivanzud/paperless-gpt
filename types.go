@@ -95,6 +95,7 @@ type GenerateSuggestionsRequest struct {
 	GenerateCorrespondents bool       `json:"generate_correspondents,omitempty"`
 	GenerateCreatedDate    bool       `json:"generate_created_date,omitempty"`
 	GenerateCustomFields   bool       `json:"generate_custom_fields,omitempty"`
+	GenerateSummary        bool       `json:"generate_summary,omitempty"`
 	GenerateDocumentTypes  bool       `json:"generate_document_types,omitempty"`
 }
 
@@ -122,6 +123,7 @@ type DocumentSuggestion struct {
 	SuggestedCreatedDate   string                  `json:"suggested_created_date,omitempty"`
 	SuggestedDocumentType  string                  `json:"suggested_document_type,omitempty"`
 	SuggestedCustomFields  []CustomFieldSuggestion `json:"suggested_custom_fields,omitempty"`
+	SuggestedSummary       string                  `json:"suggested_summary,omitempty"`
 	KeepOriginalTags       bool                    `json:"keep_original_tags,omitempty"`
 	RemoveTags             []string                `json:"remove_tags,omitempty"`
 	AddTags                []string                `json:"add_tags,omitempty"`
@@ -163,6 +165,7 @@ type ClientInterface interface {
 	GetDocumentCountByTag(ctx context.Context, tag string) (int, error)
 	UpdateDocuments(ctx context.Context, documents []DocumentSuggestion, db *gorm.DB, isUndo bool) error
 	GetDocument(ctx context.Context, documentID int) (Document, error)
+	GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error)
 	GetAllTags(ctx context.Context) (map[string]int, error)
 	GetAllCorrespondents(ctx context.Context) (map[string]int, error)
 	GetAllDocumentTypes(ctx context.Context) ([]DocumentType, error)

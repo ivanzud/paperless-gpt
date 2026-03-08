@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -114,6 +115,13 @@ func SetModificationUndone(db *gorm.DB, record *ModificationHistory) error {
 
 // SaveSingleOcrPageResult saves or updates the OCR result for a single page, including GenerationInfo as JSON
 func SaveSingleOcrPageResult(db *gorm.DB, docID int, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
+	return SaveSingleOcrPageResultWithContext(context.Background(), db, docID, pageIdx, text, ocrLimitHit, generationInfoJSON)
+}
+
+// SaveSingleOcrPageResultWithContext saves or updates the OCR result for a single page with context propagation.
+func SaveSingleOcrPageResultWithContext(ctx context.Context, db *gorm.DB, docID int, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
+	db = db.WithContext(ctx)
+
 	var result OCRPageResult
 	tx := db.Where("document_id = ? AND page_index = ?", docID, pageIdx).First(&result)
 	if tx.Error == nil {

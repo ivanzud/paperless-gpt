@@ -81,6 +81,10 @@ func (m *mockClient) GetDocument(ctx context.Context, documentID int) (Document,
 	return Document{}, fmt.Errorf("document %d not found", documentID)
 }
 
+func (m *mockClient) GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error) {
+	return nil, nil
+}
+
 func (m *mockClient) AddDocument(doc Document, tags []string) {
 	m.documents[doc.ID] = doc
 
@@ -116,7 +120,7 @@ func (a *appStubBG) processAutoOcrTagDocuments(ctx context.Context) (int, error)
 	a.ocrCalls++
 	// Return fixed count for background test
 	if a.App == nil {
-		return 1, nil
+		return 0, nil
 	}
 	return a.App.processAutoOcrTagDocuments(ctx)
 }
@@ -141,6 +145,8 @@ func setupTest(t *testing.T) *testEnv {
 	correspondentTemplate, err = template.New("correspondent").Funcs(sprig.FuncMap()).Parse("")
 	require.NoError(t, err)
 	createdDateTemplate, err = template.New("created_date").Funcs(sprig.FuncMap()).Parse("")
+	require.NoError(t, err)
+	summaryTemplate, err = template.New("summary").Funcs(sprig.FuncMap()).Parse("")
 	require.NoError(t, err)
 
 	// Create test environment

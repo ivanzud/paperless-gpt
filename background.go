@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,45 @@ type BackgroundProcessor interface {
 	processAutoOcrTagDocuments(ctx context.Context) (int, error)
 	processAutoTagDocuments(ctx context.Context) (int, error)
 	isOcrEnabled() bool
+}
+
+func getBackgroundDocumentTimeout() time.Duration {
+	const defaultTimeout = 15 * time.Minute
+
+	raw := strings.TrimSpace(os.Getenv("BACKGROUND_DOCUMENT_TIMEOUT"))
+	if raw == "" {
+		return defaultTimeout
+	}
+	if raw == "0" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+
+	timeout, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Warnf("Invalid BACKGROUND_DOCUMENT_TIMEOUT value %q, using default %s", raw, defaultTimeout)
+		return defaultTimeout
+	}
+	if timeout < 0 {
+		log.Warnf("Negative BACKGROUND_DOCUMENT_TIMEOUT value %q is invalid, using default %s", raw, defaultTimeout)
+		return defaultTimeout
+	}
+
+	return timeout
+}
+
+func withBackgroundDocumentTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := getBackgroundDocumentTimeout()
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+
+	return context.WithTimeout(parent, timeout)
 }
 
 // Start our background tasks in a goroutine
@@ -195,6 +236,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 	var errs []error
 
 	for _, document := range documents {
+		docCtx, cancel := withBackgroundDocumentTimeout(ctx)
 		docLogger := documentLogger(document.ID)
 		docLogger.Info("Processing document for OCR")
 
@@ -213,7 +255,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 				// Remove only the autoOcrTag to take it out of the processing queue
 				// while preserving the OCR complete tag
-				err = app.Client.UpdateDocuments(ctx, []DocumentSuggestion{
+				err = app.Client.UpdateDocuments(docCtx, []DocumentSuggestion{
 					{
 						ID:               document.ID,
 						OriginalDocument: document,
@@ -222,11 +264,13 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				}, app.Database, false)
 
 				if err != nil {
+					cancel()
 					docLogger.Errorf("Update to remove autoOcrTag failed: %v", err)
 					errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, err))
 					continue
 				}
 
+				cancel()
 				docLogger.Info("Successfully removed auto OCR tag")
 				successCount++
 				continue
@@ -247,18 +291,20 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 		var err error
 		if app.docProcessor != nil {
 			// Use injected processor if available
-			processedDoc, err = app.docProcessor.ProcessDocumentOCR(ctx, document.ID, options, "")
+			processedDoc, err = app.docProcessor.ProcessDocumentOCR(docCtx, document.ID, options, "")
 		} else {
 			// Use the app's own implementation if no processor is injected
-			processedDoc, err = app.ProcessDocumentOCR(ctx, document.ID, options, "")
+			processedDoc, err = app.ProcessDocumentOCR(docCtx, document.ID, options, "")
 		}
 
 		if err != nil {
+			cancel()
 			docLogger.Errorf("OCR processing failed: %v", err)
 			errs = append(errs, fmt.Errorf("document %d OCR error: %w", document.ID, err))
 			continue
 		}
 		if processedDoc == nil {
+			cancel()
 			docLogger.Info("OCR processing skipped for document")
 			continue
 		}
@@ -289,14 +335,14 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 		if autoOcrThenClassify {
 			docLogger.Info("Chaining into classification after OCR")
 
-			classifyDoc, fetchErr := app.Client.GetDocument(ctx, document.ID)
+			classifyDoc, fetchErr := app.Client.GetDocument(docCtx, document.ID)
 			if fetchErr != nil {
 				docLogger.Errorf("Failed to fetch full document for classification, skipping: %v", fetchErr)
 			} else {
 				classifyDoc.Content = processedDoc.Text
 				refreshCustomFieldsCache(app.Client)
 
-				classifySuggestion, classifyErr := app.classifyDocument(ctx, classifyDoc, docLogger)
+				classifySuggestion, classifyErr := app.classifyDocument(docCtx, classifyDoc, docLogger)
 				if classifyErr != nil {
 					docLogger.Errorf("Classification after OCR failed (OCR content will still be saved): %v", classifyErr)
 				} else {
@@ -330,18 +376,21 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 		// Skip updating the original document if it was actually replaced (deleted) during OCR.
 		// The replacement document will be processed as a new document on the next cycle.
 		if options.ReplaceOriginal && processedDoc != nil && processedDoc.ReplacedOriginal {
+			cancel()
 			docLogger.Info("Skipping tag update for replaced document (original was deleted)")
 		} else {
-			err = app.Client.UpdateDocuments(ctx, []DocumentSuggestion{
+			err = app.Client.UpdateDocuments(docCtx, []DocumentSuggestion{
 				documentSuggestion,
 			}, app.Database, false)
 			if err != nil {
+				cancel()
 				docLogger.Errorf("Update after OCR failed: %v", err)
 				errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, err))
 				continue
 			}
 		}
 
+		cancel()
 		docLogger.Info("Successfully processed document OCR")
 		successCount++
 	}

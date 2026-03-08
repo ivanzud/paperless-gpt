@@ -433,7 +433,7 @@ paperless-gpt offers different methods for processing documents, giving you flex
 - **How it works**: Processes the entire PDF document in a single operation
 - **Best for**: Providers that handle multi-page documents efficiently, reduced API calls
 - **Configuration**: `OCR_PROCESS_MODE: "whole_pdf"`
-- **Note**: Processing large PDFs may cause you to hit the API limit of your OCR provider. If you encounter problems with large documents, consider switching to `pdf` mode, which processes pages individually.
+- **Note**: Processing large PDFs may cause you to hit the API limit of your OCR provider. When paperless-gpt detects a page/file-size limit failure in `whole_pdf` mode, it retries that document automatically in `pdf` mode.
 
 ### Provider Compatibility
 
@@ -572,6 +572,7 @@ For best results with the enhanced OCR features:
 | `PGID`                              | Group ID to run the container as. See [Running as a Non-Root User](#running-as-a-non-root-user).                                                                                              | No       | 10001                      |
 | `PAPERLESS_BASE_URL`                | URL of your paperless-ngx instance (e.g. `http://paperless-ngx:8000`).                                                                                                                        | Yes      |                            |
 | `PAPERLESS_API_TOKEN`               | API token for paperless-ngx. Generate one in paperless-ngx admin.                                                                                                                             | Yes      |                            |
+| `PAPERLESS_HTTP_TIMEOUT`            | Timeout for paperless-ngx API requests as a Go duration (for example `5m`, `30s`). Set to `0` to disable.                                                                                   | No       | `5m`                       |
 | `PAPERLESS_PUBLIC_URL`              | Public URL for Paperless (if different from `PAPERLESS_BASE_URL`).                                                                                                                            | No       |                            |
 | `MANUAL_TAG`                        | Tag for manual processing.                                                                                                                                                                    | No       | paperless-gpt              |
 | `AUTO_TAG`                          | Tag for auto processing.                                                                                                                                                                      | No       | paperless-gpt-auto         |
@@ -594,6 +595,7 @@ For best results with the enhanced OCR features:
 | `LLM_REQUESTS_PER_MINUTE`           | Maximum requests per minute for the main LLM. Useful for managing API costs or local LLM load.                                                                                                | No       | 120                        |
 | `LLM_MAX_RETRIES`                   | Maximum retry attempts for failed main LLM requests.                                                                                                                                          | No       | 3                          |
 | `LLM_BACKOFF_MAX_WAIT`              | Maximum wait time between retries for the main LLM (e.g., `30s`).                                                                                                                             | No       | 30s                        |
+| `BACKGROUND_DOCUMENT_TIMEOUT`       | Timeout for processing a single document in automatic OCR/background mode. Accepts seconds or a Go duration (for example `900`, `15m`). Set to `0` to disable.                              | No       | `15m`                      |
 | `OCR_PROVIDER`                      | OCR provider to use (`llm`, `azure`, or `google_docai`).                                                                                                                                      | No       | llm                        |
 | `OCR_PROCESS_MODE`                  | Method for processing documents: `image` (convert to images first), `pdf` (process PDF pages directly), or `whole_pdf` (entire PDF at once).                                                  | No       | image                      |
 | `VISION_LLM_PROVIDER`               | AI backend for LLM OCR (`openai`, `ollama`, `mistral`, or `anthropic`). Required if OCR_PROVIDER is `llm`.                                                                                    | Cond.    |                            |
