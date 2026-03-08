@@ -64,6 +64,7 @@ type Config struct {
 	VisionLLMProvider string
 	VisionLLMModel    string
 	VisionLLMHost     string // Optional host override for Ollama vision/OCR traffic
+	VisionLLMThink    *bool
 	VisionLLMPrompt   string
 
 	// Azure Document Intelligence settings

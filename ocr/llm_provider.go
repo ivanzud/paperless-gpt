@@ -31,6 +31,7 @@ type LLMProvider struct {
 	maxTokens   int
 	temperature *float64
 	ollamaTopK  *int
+	ollamaThink *bool
 }
 
 // WithPrompt returns a shallow copy of the provider with a different prompt.
@@ -90,6 +91,7 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 		maxTokens:   config.VisionLLMMaxTokens,
 		temperature: config.VisionLLMTemperature,
 		ollamaTopK:  config.OllamaOcrTopK,
+		ollamaThink: config.VisionLLMThink,
 	}, nil
 }
 
@@ -162,6 +164,9 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 	}
 	if providerName == "ollama" && p.ollamaTopK != nil {
 		callOpts = append(callOpts, llms.WithTopK(*p.ollamaTopK))
+	}
+	if providerName == "ollama" {
+		callOpts = append(callOpts, ollamaThinkingCallOptions(p.ollamaThink)...)
 	}
 
 	// Convert the image to text
