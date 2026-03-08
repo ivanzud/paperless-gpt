@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source("../src");
+@source "../index.html";
 
 /* Last tag styling - indicate cannot be deleted */
 .react-tags__tag--last {
