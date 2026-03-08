@@ -1,4 +1,4 @@
-package ocr
+package textsanitize
 
 import (
 	"testing"
@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestStripReasoning verifies reasoning-tag stripping across balanced and malformed tag patterns.
 func TestStripReasoning(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -53,6 +54,11 @@ func TestStripReasoning(t *testing.T) {
 			expected: "Content",
 		},
 		{
+			name:     "Balanced tags then dangling closing tag",
+			input:    "<think>ok</think> </think> content",
+			expected: "content",
+		},
+		{
 			name:     "Dangling closing tag with trailing content",
 			input:    "thinkingstuff </think> content",
 			expected: "content",
@@ -61,7 +67,7 @@ func TestStripReasoning(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := stripReasoning(tc.input)
+			result := StripReasoning(tc.input)
 			assert.Equal(t, tc.expected, result)
 		})
 	}
