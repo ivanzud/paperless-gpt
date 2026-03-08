@@ -13,6 +13,8 @@ import (
 
 	_ "image/jpeg"
 
+	"paperless-gpt/sanitize"
+
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -63,7 +65,7 @@ func (app *App) getSuggestedCorrespondent(ctx context.Context, content string, s
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	})
+	}, mainLLMCallOptions()...)
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
 	}
@@ -133,7 +135,7 @@ func (app *App) getSuggestedTags(
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	})
+	}, mainLLMCallOptions()...)
 	if err != nil {
 		logger.Errorf("Error getting response from LLM: %v", err)
 		return nil, fmt.Errorf("error getting response from LLM: %v", err)
@@ -219,7 +221,7 @@ func (app *App) getSuggestedDocumentType(
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	})
+	}, mainLLMCallOptions()...)
 	if err != nil {
 		logger.Errorf("Error getting response from LLM: %v", err)
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
@@ -289,7 +291,7 @@ func (app *App) getSuggestedTitle(ctx context.Context, content string, originalT
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	})
+	}, mainLLMCallOptions()...)
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
 	}
@@ -345,7 +347,7 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, log
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	})
+	}, mainLLMCallOptions()...)
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
 	}
@@ -401,7 +403,7 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 		return nil, fmt.Errorf("error calculating available tokens for custom fields: %v", err)
 	}
 
-	truncatedContent, err := truncateContentByTokens(doc.Content, availableTokens)
+	truncatedContent, err := truncateContentByTokens(sanitize.Sanitize(doc.Content), availableTokens)
 	if err != nil {
 		return nil, fmt.Errorf("error truncating content for custom fields: %v", err)
 	}
@@ -423,7 +425,7 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 				llms.TextContent{Text: prompt},
 			},
 		},
-	})
+	}, mainLLMCallOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("error getting response from LLM for custom fields: %v", err)
 	}
@@ -529,7 +531,7 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 			startTime := time.Now()
 			docLogger.Printf("Processing Document ID %d...", documentID)
 
-			content := doc.Content
+			content := sanitize.Sanitize(doc.Content)
 			suggestedTitle := doc.Title
 			var suggestedTags []string
 			var suggestedCorrespondent string

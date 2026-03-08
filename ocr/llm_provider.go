@@ -19,6 +19,7 @@ import (
 	"github.com/tmc/langchaingo/llms/mistral"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/llms/openai"
+	"paperless-gpt/sanitize"
 )
 
 // LLMProvider implements OCR using LLM vision models
@@ -30,6 +31,20 @@ type LLMProvider struct {
 	maxTokens   int
 	temperature *float64
 	ollamaTopK  *int
+	ollamaThink *bool
+}
+
+// WithPrompt returns a shallow copy of the provider with a different prompt.
+// This enables per-document prompt rendering without mutating shared state.
+func (p *LLMProvider) WithPrompt(prompt string) *LLMProvider {
+	clone := *p
+	clone.prompt = prompt
+	return &clone
+}
+
+// GetPrompt returns the current OCR prompt.
+func (p *LLMProvider) GetPrompt() string {
+	return p.prompt
 }
 
 func newLLMProvider(config Config) (*LLMProvider, error) {
@@ -76,6 +91,7 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 		maxTokens:   config.VisionLLMMaxTokens,
 		temperature: config.VisionLLMTemperature,
 		ollamaTopK:  config.OllamaOcrTopK,
+		ollamaThink: config.VisionLLMThink,
 	}, nil
 }
 
@@ -111,7 +127,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		}).Debug("Image dimensions")
 	}
 
-	logger.Debugf("Prompt: %s", p.prompt)
+	logger.Debugf("Prompt length: %d", len(p.prompt))
 
 	// Prepare content parts based on provider type
 	var parts []llms.ContentPart
@@ -136,7 +152,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 
 	parts = []llms.ContentPart{
 		contentPart,
-		llms.TextPart(p.prompt),
+		llms.TextPart(sanitize.Sanitize(p.prompt)),
 	}
 
 	var callOpts []llms.CallOption
@@ -148,6 +164,9 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 	}
 	if providerName == "ollama" && p.ollamaTopK != nil {
 		callOpts = append(callOpts, llms.WithTopK(*p.ollamaTopK))
+	}
+	if providerName == "ollama" {
+		callOpts = append(callOpts, ollamaThinkingCallOptions(p.ollamaThink)...)
 	}
 
 	// Convert the image to text
