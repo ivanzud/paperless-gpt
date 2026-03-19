@@ -655,13 +655,28 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 
 		log.Debugf("Document %d: Final tag names after compacting: %v", documentID, finalTagNames)
 
-		// NOTE: this will dump the OCR complete tag if it doesn't exist in paperless-ngx
 		if !hasSameTags(originalDoc.Tags, finalTagNames) {
 			var finalTagIDs []int
 			for _, tagName := range finalTagNames {
 				if tagID, exists := availableTags[tagName]; exists {
 					finalTagIDs = append(finalTagIDs, tagID)
+					continue
 				}
+
+				isSystemTag := tagName == manualTag || tagName == autoTag || tagName == autoOcrTag || tagName == pdfOCRCompleteTag
+				if !isSystemTag {
+					log.Debugf("Document %d: skipping unknown non-system tag %q", documentID, tagName)
+					continue
+				}
+
+				tagID, err := client.CreateTag(ctx, tagName)
+				if err != nil {
+					return fmt.Errorf("error creating missing system tag %q for document %d: %w", tagName, documentID, err)
+				}
+
+				availableTags[tagName] = tagID
+				finalTagIDs = append(finalTagIDs, tagID)
+				log.Infof("Document %d: created missing system tag %q with ID %d", documentID, tagName, tagID)
 			}
 			// Only update tags if there are remaining tags after changes
 			// Sending an empty tags array causes Paperless-NGX to return an error
