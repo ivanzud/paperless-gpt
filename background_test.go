@@ -38,9 +38,13 @@ func (m *mockOCRProvider) ProcessImage(ctx context.Context, imageData []byte, pa
 // mockDocumentProcessor implements the DocumentProcessor interface for testing
 type mockDocumentProcessor struct {
 	mockText string
+	err      error
 }
 
 func (m *mockDocumentProcessor) ProcessDocumentOCR(ctx context.Context, documentID int, options OCROptions, jobID string) (*ProcessedDocument, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return &ProcessedDocument{
 		ID:   documentID,
 		Text: m.mockText,
@@ -54,6 +58,7 @@ type mockClient struct {
 	tags             map[string]int
 	taggedDocuments  map[string][]Document
 	updateDocsCalled bool
+	updatedDocuments []DocumentSuggestion
 }
 
 func newMockClient(baseClient *PaperlessClient) *mockClient {
@@ -71,6 +76,7 @@ func (m *mockClient) GetDocumentsByTag(ctx context.Context, tag string, pageSize
 
 func (m *mockClient) UpdateDocuments(ctx context.Context, documents []DocumentSuggestion, db *gorm.DB, isUndo bool) error {
 	m.updateDocsCalled = true
+	m.updatedDocuments = append(m.updatedDocuments, documents...)
 	return nil
 }
 
@@ -546,4 +552,48 @@ func TestProcessAutoOcrTagDocuments(t *testing.T) {
 			assert.True(t, client.updateDocsCalled, "UpdateDocuments should have been called")
 		})
 	}
+}
+
+func TestProcessAutoOcrTagDocuments_RemovesAutoTagAfterRepeatedFailures(t *testing.T) {
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+	t.Setenv("BACKGROUND_DOCUMENT_MAX_FAILURES", "2")
+
+	env := setupTest(t)
+	defer env.teardown()
+
+	client := newMockClient(env.client)
+	client.AddTag(autoOcrTag, 2)
+	client.AddTag(pdfOCRCompleteTag, 4)
+
+	document := Document{
+		ID:               99,
+		Title:            "Broken OCR doc",
+		Tags:             []string{autoOcrTag},
+		Content:          "Original content",
+		OriginalFileName: "broken.pdf",
+	}
+	client.AddDocument(document, document.Tags)
+
+	app := &App{
+		Client:             client,
+		Database:           env.db,
+		docProcessor:       &mockDocumentProcessor{err: errors.New("vision provider hung")},
+		ocrProcessMode:     "image",
+		pdfOCRTagging:      true,
+		pdfOCRCompleteTag:  pdfOCRCompleteTag,
+		pdfSkipExistingOCR: false,
+	}
+
+	count, err := app.processAutoOcrTagDocuments(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, client.updatedDocuments, "document should stay queued until retry budget is exhausted")
+
+	count, err = app.processAutoOcrTagDocuments(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "terminal failure cleanup should count as handled progress")
+	require.Len(t, client.updatedDocuments, 1)
+	assert.Equal(t, []string{autoOcrTag}, client.updatedDocuments[0].RemoveTags)
+	assert.Equal(t, document.ID, client.updatedDocuments[0].ID)
 }
