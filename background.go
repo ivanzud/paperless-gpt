@@ -59,6 +59,84 @@ func withBackgroundDocumentTimeout(parent context.Context) (context.Context, con
 	return context.WithTimeout(parent, timeout)
 }
 
+func getBackgroundDocumentMaxFailures() int {
+	const defaultMaxFailures = 3
+
+	raw := strings.TrimSpace(os.Getenv("BACKGROUND_DOCUMENT_MAX_FAILURES"))
+	if raw == "" {
+		return defaultMaxFailures
+	}
+
+	maxFailures, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Warnf("Invalid BACKGROUND_DOCUMENT_MAX_FAILURES value %q, using default %d", raw, defaultMaxFailures)
+		return defaultMaxFailures
+	}
+	if maxFailures < 0 {
+		log.Warnf("Negative BACKGROUND_DOCUMENT_MAX_FAILURES value %q is invalid, using default %d", raw, defaultMaxFailures)
+		return defaultMaxFailures
+	}
+
+	return maxFailures
+}
+
+func (app *App) noteBackgroundOCRFailure(documentID int) int {
+	app.backgroundOCRMu.Lock()
+	defer app.backgroundOCRMu.Unlock()
+
+	if app.backgroundOCRFails == nil {
+		app.backgroundOCRFails = make(map[int]int)
+	}
+
+	app.backgroundOCRFails[documentID]++
+	return app.backgroundOCRFails[documentID]
+}
+
+func (app *App) clearBackgroundOCRFailure(documentID int) {
+	app.backgroundOCRMu.Lock()
+	defer app.backgroundOCRMu.Unlock()
+
+	if app.backgroundOCRFails == nil {
+		return
+	}
+
+	delete(app.backgroundOCRFails, documentID)
+}
+
+func (app *App) handleBackgroundOCRFailure(parentCtx context.Context, document Document, docLogger *logrus.Entry, cause error) (bool, error) {
+	failureCount := app.noteBackgroundOCRFailure(document.ID)
+	maxFailures := getBackgroundDocumentMaxFailures()
+
+	if maxFailures <= 0 {
+		return false, fmt.Errorf("%w (background OCR failure %d)", cause, failureCount)
+	}
+	if failureCount < maxFailures {
+		return false, fmt.Errorf("%w (background OCR failure %d/%d)", cause, failureCount, maxFailures)
+	}
+
+	docLogger.WithError(cause).
+		WithField("failure_count", failureCount).
+		Warn("Max background OCR failures reached; removing auto OCR tag to unblock the queue")
+
+	cleanupCtx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
+	defer cancel()
+
+	err := app.Client.UpdateDocuments(cleanupCtx, []DocumentSuggestion{
+		{
+			ID:               document.ID,
+			OriginalDocument: document,
+			RemoveTags:       []string{autoOcrTag},
+		},
+	}, app.Database, false)
+	if err != nil {
+		return false, fmt.Errorf("document %d cleanup after %d OCR failures failed: %w", document.ID, failureCount, err)
+	}
+
+	app.clearBackgroundOCRFailure(document.ID)
+	docLogger.WithField("failure_count", failureCount).Warn("Removed auto OCR tag after repeated OCR failures")
+	return true, nil
+}
+
 // Start our background tasks in a goroutine
 func StartBackgroundTasks(ctx context.Context, app BackgroundProcessor) {
 	go func() {
@@ -264,12 +342,18 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				}, app.Database, false)
 
 				if err != nil {
+					handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("update error: %w", err))
 					cancel()
-					docLogger.Errorf("Update to remove autoOcrTag failed: %v", err)
-					errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, err))
+					if handled {
+						successCount++
+						continue
+					}
+					docLogger.Errorf("Update to remove autoOcrTag failed: %v", handledErr)
+					errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, handledErr))
 					continue
 				}
 
+				app.clearBackgroundOCRFailure(document.ID)
 				cancel()
 				docLogger.Info("Successfully removed auto OCR tag")
 				successCount++
@@ -298,12 +382,18 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 		}
 
 		if err != nil {
+			handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("OCR error: %w", err))
 			cancel()
-			docLogger.Errorf("OCR processing failed: %v", err)
-			errs = append(errs, fmt.Errorf("document %d OCR error: %w", document.ID, err))
+			if handled {
+				successCount++
+				continue
+			}
+			docLogger.Errorf("OCR processing failed: %v", handledErr)
+			errs = append(errs, fmt.Errorf("document %d OCR error: %w", document.ID, handledErr))
 			continue
 		}
 		if processedDoc == nil {
+			app.clearBackgroundOCRFailure(document.ID)
 			cancel()
 			docLogger.Info("OCR processing skipped for document")
 			continue
@@ -383,13 +473,19 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				documentSuggestion,
 			}, app.Database, false)
 			if err != nil {
+				handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("update after OCR failed: %w", err))
 				cancel()
-				docLogger.Errorf("Update after OCR failed: %v", err)
-				errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, err))
+				if handled {
+					successCount++
+					continue
+				}
+				docLogger.Errorf("Update after OCR failed: %v", handledErr)
+				errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, handledErr))
 				continue
 			}
 		}
 
+		app.clearBackgroundOCRFailure(document.ID)
 		cancel()
 		docLogger.Info("Successfully processed document OCR")
 		successCount++

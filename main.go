@@ -140,6 +140,8 @@ type App struct {
 	pdfOCRCompleteTag  string            // Tag to add to documents that have been OCR processed
 	pdfOCRTagging      bool              // Whether to add the OCR complete tag to processed PDFs
 	pdfSkipExistingOCR bool              // Whether to skip processing PDFs that already have OCR detected
+	backgroundOCRMu    sync.Mutex
+	backgroundOCRFails map[int]int
 }
 
 func main() {
@@ -349,6 +351,7 @@ func main() {
 		pdfOCRCompleteTag:  pdfOCRCompleteTag,
 		pdfOCRTagging:      pdfOCRTagging,
 		pdfSkipExistingOCR: pdfSkipExistingOCR,
+		backgroundOCRFails: make(map[int]int),
 	}
 
 	if app.isOcrEnabled() {
