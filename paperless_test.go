@@ -500,6 +500,73 @@ func TestUpdateDocuments(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUpdateDocuments_CreatesMissingSystemTag(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+
+	documents := []DocumentSuggestion{
+		{
+			ID: 1,
+			OriginalDocument: Document{
+				ID:    1,
+				Title: "Doc for OCR",
+				Tags:  []string{autoOcrTag},
+			},
+			SuggestedTags:    []string{pdfOCRCompleteTag},
+			KeepOriginalTags: true,
+			RemoveTags:       []string{autoOcrTag},
+		},
+	}
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"results":[{"id":11,"name":"paperless-gpt-ocr-auto"}]}`))
+		case http.MethodPost:
+			bodyBytes, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			defer r.Body.Close()
+
+			var requestBody map[string]string
+			err = json.Unmarshal(bodyBytes, &requestBody)
+			require.NoError(t, err)
+			assert.Equal(t, pdfOCRCompleteTag, requestBody["name"])
+
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"id":42}`))
+		default:
+			t.Fatalf("Unexpected method for /api/tags/: %s", r.Method)
+		}
+	})
+
+	updatePath := fmt.Sprintf("/api/documents/%d/", documents[0].ID)
+	env.setMockResponse(updatePath, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		defer r.Body.Close()
+
+		var updatedFields map[string]interface{}
+		err = json.Unmarshal(bodyBytes, &updatedFields)
+		require.NoError(t, err)
+
+		assert.Equal(t, map[string]interface{}{
+			"tags": []interface{}{float64(42)},
+		}, updatedFields)
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ctx := context.Background()
+	err := env.client.UpdateDocuments(ctx, documents, env.db, false)
+	require.NoError(t, err)
+}
+
 // TestUpdateDocuments_RemovingLastTag tests the behavior when removing the last remaining tag
 // from a document, which Paperless-NGX REST API does not allow (empty tags array is rejected).
 // The test covers two scenarios:
@@ -898,7 +965,7 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 		os.Setenv("MANUAL_TAG", originalManualTag)
 		os.Setenv("AUTO_TAG", originalAutoTag)
 	}()
-	
+
 	// Set the tag values and reinitialize the global variables
 	os.Setenv("MANUAL_TAG", "paperless-gpt")
 	os.Setenv("AUTO_TAG", "paperless-gpt-auto")
@@ -936,8 +1003,8 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "regular-tag"},
-				{"id": 2, "name": "paperless-gpt"},       // manualTag
-				{"id": 3, "name": "paperless-gpt-auto"},  // autoTag
+				{"id": 2, "name": "paperless-gpt"},      // manualTag
+				{"id": 3, "name": "paperless-gpt-auto"}, // autoTag
 			},
 			"next": nil,
 		})
@@ -954,7 +1021,7 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 	assert.Contains(t, receivedQuery, "more_like_id=1")
 	assert.Contains(t, receivedQuery, "page_size=5")
 	// Check that tag exclusion is present (order may vary)
-	assert.True(t, 
+	assert.True(t,
 		strings.Contains(receivedQuery, "tags__id__none=2,3") || strings.Contains(receivedQuery, "tags__id__none=3,2"),
 		"Should exclude paperless-gpt tags with IDs 2 and 3 (in any order), got: %s", receivedQuery)
 }
@@ -967,7 +1034,7 @@ func TestGetSimilarDocuments_NoPaperlessGPTTagsToExclude(t *testing.T) {
 		os.Setenv("MANUAL_TAG", originalManualTag)
 		os.Setenv("AUTO_TAG", originalAutoTag)
 	}()
-	
+
 	// Set the tag values and reinitialize the global variables
 	os.Setenv("MANUAL_TAG", "paperless-gpt")
 	os.Setenv("AUTO_TAG", "paperless-gpt-auto")
