@@ -103,6 +103,30 @@ func (app *App) clearBackgroundOCRFailure(documentID int) {
 	delete(app.backgroundOCRFails, documentID)
 }
 
+func buildFailedOCRCleanupSuggestion(document Document) DocumentSuggestion {
+	suggestion := DocumentSuggestion{
+		ID:               document.ID,
+		OriginalDocument: document,
+		RemoveTags:       []string{autoOcrTag},
+	}
+
+	if ocrFailedTag != "" {
+		suggestion.SuggestedTags = []string{ocrFailedTag}
+		suggestion.KeepOriginalTags = true
+	}
+
+	return suggestion
+}
+
+func (app *App) cleanupFailedOCRDocument(parentCtx context.Context, document Document) error {
+	cleanupCtx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
+	defer cancel()
+
+	return app.Client.UpdateDocuments(cleanupCtx, []DocumentSuggestion{
+		buildFailedOCRCleanupSuggestion(document),
+	}, app.Database, false)
+}
+
 func (app *App) handleBackgroundOCRFailure(parentCtx context.Context, document Document, docLogger *logrus.Entry, cause error) (bool, error) {
 	failureCount := app.noteBackgroundOCRFailure(document.ID)
 	maxFailures := getBackgroundDocumentMaxFailures()
@@ -118,16 +142,7 @@ func (app *App) handleBackgroundOCRFailure(parentCtx context.Context, document D
 		WithField("failure_count", failureCount).
 		Warn("Max background OCR failures reached; removing auto OCR tag to unblock the queue")
 
-	cleanupCtx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
-	defer cancel()
-
-	err := app.Client.UpdateDocuments(cleanupCtx, []DocumentSuggestion{
-		{
-			ID:               document.ID,
-			OriginalDocument: document,
-			RemoveTags:       []string{autoOcrTag},
-		},
-	}, app.Database, false)
+	err := app.cleanupFailedOCRDocument(parentCtx, document)
 	if err != nil {
 		return false, fmt.Errorf("document %d cleanup after %d OCR failures failed: %w", document.ID, failureCount, err)
 	}
@@ -382,6 +397,21 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 		}
 
 		if err != nil {
+			if ocrSkipFailedDocuments {
+				cleanupErr := app.cleanupFailedOCRDocument(ctx, document)
+				cancel()
+				if cleanupErr != nil {
+					docLogger.Errorf("OCR processing failed and queue cleanup also failed: %v", cleanupErr)
+					errs = append(errs, fmt.Errorf("document %d OCR error: %w", document.ID, err))
+					errs = append(errs, fmt.Errorf("document %d queue cleanup error: %w", document.ID, cleanupErr))
+					continue
+				}
+				app.clearBackgroundOCRFailure(document.ID)
+				docLogger.WithError(err).Warn("OCR processing failed; removed document from OCR queue due to OCR_SKIP_FAILED_DOCUMENTS")
+				successCount++
+				continue
+			}
+
 			handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("OCR error: %w", err))
 			cancel()
 			if handled {

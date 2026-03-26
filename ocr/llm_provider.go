@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"image"
 	"os"
-	"paperless-gpt/internal/textsanitize"
 	"strings"
 
 	_ "image/jpeg"
@@ -127,7 +126,8 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		}).Debug("Image dimensions")
 	}
 
-	logger.Debugf("Prompt length: %d", len(p.prompt))
+	prompt := effectiveOCRPrompt(p.model, p.prompt)
+	logger.WithField("prompt_length", len(prompt)).Debug("Using OCR prompt")
 
 	// Prepare content parts based on provider type
 	var parts []llms.ContentPart
@@ -152,7 +152,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 
 	parts = []llms.ContentPart{
 		contentPart,
-		llms.TextPart(sanitize.Sanitize(p.prompt)),
+		llms.TextPart(sanitize.Sanitize(prompt)),
 	}
 
 	var callOpts []llms.CallOption
@@ -182,7 +182,16 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		return nil, fmt.Errorf("error getting response from LLM: %w", err)
 	}
 
-	text := textsanitize.StripReasoning(completion.Choices[0].Content)
+	text := sanitizeOCRText(completion.Choices[0].Content)
+	thinkingContent := ""
+	if completion.Choices[0].GenerationInfo != nil {
+		if rawThinking, ok := completion.Choices[0].GenerationInfo["ThinkingContent"].(string); ok {
+			thinkingContent = sanitizeOCRText(rawThinking)
+		}
+	}
+	if text == "" && thinkingContent != "" {
+		logger.WithField("thinking_length", len(thinkingContent)).Warn("Vision model returned empty content with non-empty thinking content")
+	}
 	limitHit := false
 	tokenCount := -1
 
@@ -214,6 +223,17 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 
 	logger.WithField("content_length", len(result.Text)).WithFields(completion.Choices[0].GenerationInfo).Info("Successfully processed image")
 	return result, nil
+}
+
+func isGLMOCRModel(model string) bool {
+	return strings.Contains(strings.ToLower(model), "glm-ocr")
+}
+
+func effectiveOCRPrompt(model string, configuredPrompt string) string {
+	if isGLMOCRModel(model) {
+		return "Text Recognition:"
+	}
+	return configuredPrompt
 }
 
 // createOpenAIClient creates a new OpenAI vision model client

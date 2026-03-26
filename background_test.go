@@ -597,3 +597,52 @@ func TestProcessAutoOcrTagDocuments_RemovesAutoTagAfterRepeatedFailures(t *testi
 	assert.Equal(t, []string{autoOcrTag}, client.updatedDocuments[0].RemoveTags)
 	assert.Equal(t, document.ID, client.updatedDocuments[0].ID)
 }
+
+func TestProcessAutoOcrTagDocuments_SkipsFailedDocumentsImmediatelyWhenConfigured(t *testing.T) {
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+
+	prevSkipFailedDocs := ocrSkipFailedDocuments
+	prevFailedTag := ocrFailedTag
+	ocrSkipFailedDocuments = true
+	ocrFailedTag = "paperless-gpt-ocr-failed"
+	t.Cleanup(func() {
+		ocrSkipFailedDocuments = prevSkipFailedDocs
+		ocrFailedTag = prevFailedTag
+	})
+
+	env := setupTest(t)
+	defer env.teardown()
+
+	client := newMockClient(env.client)
+	client.AddTag(autoOcrTag, 2)
+	client.AddTag(pdfOCRCompleteTag, 4)
+	client.AddTag(ocrFailedTag, 5)
+
+	document := Document{
+		ID:               100,
+		Title:            "Broken OCR doc",
+		Tags:             []string{autoOcrTag},
+		Content:          "Original content",
+		OriginalFileName: "broken.pdf",
+	}
+	client.AddDocument(document, document.Tags)
+
+	app := &App{
+		Client:             client,
+		Database:           env.db,
+		docProcessor:       &mockDocumentProcessor{err: errors.New("vision provider hung")},
+		ocrProcessMode:     "image",
+		pdfOCRTagging:      true,
+		pdfOCRCompleteTag:  pdfOCRCompleteTag,
+		pdfSkipExistingOCR: false,
+	}
+
+	count, err := app.processAutoOcrTagDocuments(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	require.Len(t, client.updatedDocuments, 1)
+	assert.Equal(t, []string{autoOcrTag}, client.updatedDocuments[0].RemoveTags)
+	assert.Equal(t, []string{ocrFailedTag}, client.updatedDocuments[0].SuggestedTags)
+	assert.True(t, client.updatedDocuments[0].KeepOriginalTags)
+}

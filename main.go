@@ -52,6 +52,9 @@ var (
 	manualOcrTag                  = os.Getenv("MANUAL_OCR_TAG") // Not used yet
 	autoOcrTag                    = os.Getenv("AUTO_OCR_TAG")
 	ocrProcessMode                = os.Getenv("OCR_PROCESS_MODE")
+	ocrSkipFailedPages            = strings.ToLower(os.Getenv("OCR_SKIP_FAILED_PAGES")) == "true"
+	ocrSkipFailedDocuments        = strings.ToLower(os.Getenv("OCR_SKIP_FAILED_DOCUMENTS")) == "true"
+	ocrFailedTag                  = os.Getenv("OCR_FAILED_TAG")
 	llmProvider                   = os.Getenv("LLM_PROVIDER")
 	llmModel                      = os.Getenv("LLM_MODEL")
 	visionLlmProvider             = os.Getenv("VISION_LLM_PROVIDER")
@@ -690,6 +693,9 @@ func validateOrDefaultEnvVars() {
 		log.Warnf("Invalid OCR_PROCESS_MODE value: %s, defaulting to image", ocrProcessMode)
 		ocrProcessMode = "image"
 	}
+	if ocrSkipFailedDocuments && ocrFailedTag == "" {
+		ocrFailedTag = "paperless-gpt-ocr-failed"
+	}
 
 	// Initialize token limit from environment variable
 	if limit := os.Getenv("TOKEN_LIMIT"); limit != "" {
@@ -769,6 +775,12 @@ func validateOrDefaultEnvVars() {
 	ocrProviderEnv := os.Getenv("OCR_PROVIDER")
 	if ocrProviderEnv != "" {
 		log.Infof("OCR provider: %s", os.Getenv("OCR_PROVIDER"))
+		if ocrSkipFailedPages {
+			log.Warn("OCR_SKIP_FAILED_PAGES enabled: failed pages will be skipped instead of failing the whole document")
+		}
+		if ocrSkipFailedDocuments {
+			log.Warnf("OCR_SKIP_FAILED_DOCUMENTS enabled: failed OCR documents will be removed from the queue and tagged as %q", ocrFailedTag)
+		}
 
 		if createLocalHOCR {
 			log.Infof("hOCR file creation is enabled, output path: %s", localHOCRPath)
