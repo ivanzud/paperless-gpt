@@ -59,6 +59,7 @@ type mockClient struct {
 	taggedDocuments  map[string][]Document
 	updateDocsCalled bool
 	updatedDocuments []DocumentSuggestion
+	updateErrs       []error
 }
 
 func newMockClient(baseClient *PaperlessClient) *mockClient {
@@ -76,6 +77,13 @@ func (m *mockClient) GetDocumentsByTag(ctx context.Context, tag string, pageSize
 
 func (m *mockClient) UpdateDocuments(ctx context.Context, documents []DocumentSuggestion, db *gorm.DB, isUndo bool) error {
 	m.updateDocsCalled = true
+	if len(m.updateErrs) > 0 {
+		err := m.updateErrs[0]
+		m.updateErrs = m.updateErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	m.updatedDocuments = append(m.updatedDocuments, documents...)
 	return nil
 }
@@ -558,6 +566,11 @@ func TestProcessAutoOcrTagDocuments_RemovesAutoTagAfterRepeatedFailures(t *testi
 	autoOcrTag = "paperless-gpt-ocr-auto"
 	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
 	t.Setenv("BACKGROUND_DOCUMENT_MAX_FAILURES", "2")
+	prevFailedTag := ocrFailedTag
+	ocrFailedTag = ""
+	t.Cleanup(func() {
+		ocrFailedTag = prevFailedTag
+	})
 
 	env := setupTest(t)
 	defer env.teardown()
@@ -645,4 +658,47 @@ func TestProcessAutoOcrTagDocuments_SkipsFailedDocumentsImmediatelyWhenConfigure
 	assert.Equal(t, []string{autoOcrTag}, client.updatedDocuments[0].RemoveTags)
 	assert.Equal(t, []string{ocrFailedTag}, client.updatedDocuments[0].SuggestedTags)
 	assert.True(t, client.updatedDocuments[0].KeepOriginalTags)
+}
+
+func TestProcessAutoOcrTagDocuments_DoesNotMarkCompletedDocsAsFailedOnUpdateCleanup(t *testing.T) {
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+	t.Setenv("BACKGROUND_DOCUMENT_MAX_FAILURES", "1")
+
+	prevFailedTag := ocrFailedTag
+	ocrFailedTag = "paperless-gpt-ocr-failed"
+	t.Cleanup(func() {
+		ocrFailedTag = prevFailedTag
+	})
+
+	env := setupTest(t)
+	defer env.teardown()
+
+	client := newMockClient(env.client)
+	client.updateErrs = []error{errors.New("paperless update failed"), nil}
+
+	document := Document{
+		ID:               101,
+		Title:            "Already OCRed doc",
+		Tags:             []string{autoOcrTag, pdfOCRCompleteTag},
+		Content:          "Original content",
+		OriginalFileName: "complete.pdf",
+	}
+	client.AddDocument(document, []string{autoOcrTag})
+
+	app := &App{
+		Client:             client,
+		Database:           env.db,
+		pdfOCRTagging:      true,
+		pdfOCRCompleteTag:  pdfOCRCompleteTag,
+		pdfSkipExistingOCR: false,
+	}
+
+	count, err := app.processAutoOcrTagDocuments(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	require.Len(t, client.updatedDocuments, 1)
+	assert.Equal(t, []string{autoOcrTag}, client.updatedDocuments[0].RemoveTags)
+	assert.Empty(t, client.updatedDocuments[0].SuggestedTags)
+	assert.False(t, client.updatedDocuments[0].KeepOriginalTags)
 }
