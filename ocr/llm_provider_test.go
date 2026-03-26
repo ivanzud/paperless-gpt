@@ -152,3 +152,26 @@ func TestResolveVisionOllamaHost(t *testing.T) {
 		})
 	}
 }
+
+func TestIsGLMOCRModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    string
+		expected bool
+	}{
+		{name: "exact glm model", model: "glm-ocr", expected: true},
+		{name: "prefixed glm model", model: "THUDM/glm-ocr:latest", expected: true},
+		{name: "non glm model", model: "qwen2.5-vl", expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isGLMOCRModel(tt.model))
+		})
+	}
+}
+
+func TestEffectiveOCRPrompt(t *testing.T) {
+	assert.Equal(t, "Text Recognition:", effectiveOCRPrompt("glm-ocr", "custom prompt"))
+	assert.Equal(t, "custom prompt", effectiveOCRPrompt("qwen2.5-vl", "custom prompt"))
+}

@@ -117,7 +117,7 @@ func (p *wholePDFFallbackProvider) ProcessImage(ctx context.Context, imageConten
 		return nil, fmt.Errorf("provider supports up to 1 page per request")
 	}
 	return &ocr.OCRResult{
-		Text: fmt.Sprintf("page-%d", pageNumber),
+		Text: fmt.Sprintf("Page %d extracted text", pageNumber),
 	}, nil
 }
 
@@ -159,7 +159,7 @@ func TestProcessDocumentOCR_WholePDFFallsBackToPDFMode(t *testing.T) {
 	doc, err := app.ProcessDocumentOCR(context.Background(), 42, OCROptions{ProcessMode: "whole_pdf"}, "")
 	require.NoError(t, err)
 	require.NotNil(t, doc)
-	assert.Equal(t, "page-1\n\npage-2", doc.Text)
+	assert.Equal(t, "Page 1 extracted text\n\nPage 2 extracted text", doc.Text)
 	assert.Equal(t, []int{0, 1, 2}, provider.pagesSeen)
 	require.Len(t, client.pdfCalls, 2)
 	assert.False(t, client.pdfCalls[0].split)

@@ -167,8 +167,8 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 	var imageDataList [][]byte
 	var originalPDFData []byte
 	var totalPdfPages int
-	var imagePaths []string
 	var ocrResults []*ocr.OCRResult
+	var failedPages []int
 
 	// Default process mode to app's ocrProcessMode if not set in options
 	processMode = options.ProcessMode
@@ -208,6 +208,9 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		if result == nil {
 			docLogger.Error("Got nil result from OCR provider")
 			return nil, fmt.Errorf("error performing OCR for document %d: nil result", documentID)
+		}
+		if !ocr.IsMeaningfulOCRText(result.Text) {
+			return nil, fmt.Errorf("error performing OCR for document %d: OCR output was empty or non-actionable", documentID)
 		}
 
 		docLogger.WithField("content_length", len(result.Text)).
@@ -260,11 +263,29 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			// Pass the page number (1-based index) to ProcessImage
 			result, err := provider.ProcessImage(ctx, pdfContent, i+1)
 			if err != nil {
+				if ocrSkipFailedPages {
+					failedPages = append(failedPages, i+1)
+					pageLogger.WithError(err).Warn("OCR failed for page; skipping due to OCR_SKIP_FAILED_PAGES")
+					continue
+				}
 				return nil, fmt.Errorf("error performing OCR for document %d, page %d: %w", documentID, i+1, err)
 			}
 			if result == nil {
+				if ocrSkipFailedPages {
+					failedPages = append(failedPages, i+1)
+					pageLogger.Warn("Got nil result from OCR provider, skipping page due to OCR_SKIP_FAILED_PAGES")
+					continue
+				}
 				pageLogger.Error("Got nil result from OCR provider")
 				return nil, fmt.Errorf("error performing OCR for document %d, page %d: nil result", documentID, i+1)
+			}
+			if !ocr.IsMeaningfulOCRText(result.Text) {
+				if ocrSkipFailedPages {
+					failedPages = append(failedPages, i+1)
+					pageLogger.Warn("OCR returned empty or non-actionable text, skipping page due to OCR_SKIP_FAILED_PAGES")
+					continue
+				}
+				return nil, fmt.Errorf("error performing OCR for document %d, page %d: OCR output was empty or non-actionable", documentID, i+1)
 			}
 
 			pageLogger.WithField("has_hocr_page", result.HOCRPage != nil).
@@ -330,11 +351,38 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			// Pass the page number (1-based index) to ProcessImage
 			result, err := provider.ProcessImage(ctx, imageContent, i+1)
 			if err != nil {
+				if ocrSkipFailedPages {
+					failedPages = append(failedPages, i+1)
+					if jobID != "" {
+						jobStore.updatePagesDone(jobID, i+1)
+					}
+					pageLogger.WithError(err).Warn("OCR failed for page; skipping due to OCR_SKIP_FAILED_PAGES")
+					continue
+				}
 				return nil, fmt.Errorf("error performing OCR for document %d, page %d: %w", documentID, i+1, err)
 			}
 			if result == nil {
+				if ocrSkipFailedPages {
+					failedPages = append(failedPages, i+1)
+					if jobID != "" {
+						jobStore.updatePagesDone(jobID, i+1)
+					}
+					pageLogger.Warn("Got nil result from OCR provider, skipping page due to OCR_SKIP_FAILED_PAGES")
+					continue
+				}
 				pageLogger.Error("Got nil result from OCR provider")
 				return nil, fmt.Errorf("error performing OCR for document %d, page %d: nil result", documentID, i+1)
+			}
+			if !ocr.IsMeaningfulOCRText(result.Text) {
+				if ocrSkipFailedPages {
+					failedPages = append(failedPages, i+1)
+					if jobID != "" {
+						jobStore.updatePagesDone(jobID, i+1)
+					}
+					pageLogger.Warn("OCR returned empty or non-actionable text, skipping page due to OCR_SKIP_FAILED_PAGES")
+					continue
+				}
+				return nil, fmt.Errorf("error performing OCR for document %d, page %d: OCR output was empty or non-actionable", documentID, i+1)
 			}
 
 			if jobID != "" {
@@ -365,7 +413,21 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		}
 	}
 
+	if len(failedPages) > 0 {
+		docLogger.WithFields(logrus.Fields{
+			"failed_page_count": len(failedPages),
+			"failed_pages":      failedPages,
+		}).Warn("OCR completed with failed pages")
+	}
+
+	if len(ocrTexts) == 0 {
+		return nil, fmt.Errorf("OCR failed for all processed pages for document %d", documentID)
+	}
+
 	fullText := strings.Join(ocrTexts, "\n\n")
+	if !ocr.IsMeaningfulOCRText(fullText) {
+		return nil, fmt.Errorf("OCR output was empty or non-actionable for document %d", documentID)
+	}
 
 	// Create ProcessedDocument to hold all the results
 	processedDoc := &ProcessedDocument{
@@ -400,11 +462,9 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 
 				// Apply OCR to PDF if the feature is enabled
 				if app.createLocalPDF && app.localPDFPath != "" {
-					var processedPageCount int
-					if processMode == "pdf" || processMode == "whole_pdf" {
-						processedPageCount = len(ocrTexts)
-					} else {
-						processedPageCount = len(imagePaths)
+					processedPageCount := len(ocrTexts)
+					if processMode == "whole_pdf" {
+						processedPageCount = totalPdfPages
 					}
 
 					// SAFETY CHECK: Don't generate PDF if we're processing fewer pages than original document
