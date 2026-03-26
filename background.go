@@ -103,14 +103,14 @@ func (app *App) clearBackgroundOCRFailure(documentID int) {
 	delete(app.backgroundOCRFails, documentID)
 }
 
-func buildFailedOCRCleanupSuggestion(document Document) DocumentSuggestion {
+func buildOCRQueueCleanupSuggestion(document Document, addFailedTag bool) DocumentSuggestion {
 	suggestion := DocumentSuggestion{
 		ID:               document.ID,
 		OriginalDocument: document,
 		RemoveTags:       []string{autoOcrTag},
 	}
 
-	if ocrFailedTag != "" {
+	if addFailedTag && ocrFailedTag != "" {
 		suggestion.SuggestedTags = []string{ocrFailedTag}
 		suggestion.KeepOriginalTags = true
 	}
@@ -118,16 +118,16 @@ func buildFailedOCRCleanupSuggestion(document Document) DocumentSuggestion {
 	return suggestion
 }
 
-func (app *App) cleanupFailedOCRDocument(parentCtx context.Context, document Document) error {
+func (app *App) cleanupOCRQueueDocument(parentCtx context.Context, document Document, addFailedTag bool) error {
 	cleanupCtx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 
 	return app.Client.UpdateDocuments(cleanupCtx, []DocumentSuggestion{
-		buildFailedOCRCleanupSuggestion(document),
+		buildOCRQueueCleanupSuggestion(document, addFailedTag),
 	}, app.Database, false)
 }
 
-func (app *App) handleBackgroundOCRFailure(parentCtx context.Context, document Document, docLogger *logrus.Entry, cause error) (bool, error) {
+func (app *App) handleBackgroundOCRFailure(parentCtx context.Context, document Document, docLogger *logrus.Entry, cause error, addFailedTag bool) (bool, error) {
 	failureCount := app.noteBackgroundOCRFailure(document.ID)
 	maxFailures := getBackgroundDocumentMaxFailures()
 
@@ -142,7 +142,7 @@ func (app *App) handleBackgroundOCRFailure(parentCtx context.Context, document D
 		WithField("failure_count", failureCount).
 		Warn("Max background OCR failures reached; removing auto OCR tag to unblock the queue")
 
-	err := app.cleanupFailedOCRDocument(parentCtx, document)
+	err := app.cleanupOCRQueueDocument(parentCtx, document, addFailedTag)
 	if err != nil {
 		return false, fmt.Errorf("document %d cleanup after %d OCR failures failed: %w", document.ID, failureCount, err)
 	}
@@ -357,7 +357,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				}, app.Database, false)
 
 				if err != nil {
-					handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("update error: %w", err))
+					handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("update error: %w", err), false)
 					cancel()
 					if handled {
 						successCount++
@@ -398,7 +398,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 		if err != nil {
 			if ocrSkipFailedDocuments {
-				cleanupErr := app.cleanupFailedOCRDocument(ctx, document)
+				cleanupErr := app.cleanupOCRQueueDocument(ctx, document, true)
 				cancel()
 				if cleanupErr != nil {
 					docLogger.Errorf("OCR processing failed and queue cleanup also failed: %v", cleanupErr)
@@ -412,7 +412,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				continue
 			}
 
-			handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("OCR error: %w", err))
+			handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("OCR error: %w", err), true)
 			cancel()
 			if handled {
 				successCount++
@@ -503,7 +503,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				documentSuggestion,
 			}, app.Database, false)
 			if err != nil {
-				handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("update after OCR failed: %w", err))
+				handled, handledErr := app.handleBackgroundOCRFailure(ctx, document, docLogger, fmt.Errorf("update after OCR failed: %w", err), false)
 				cancel()
 				if handled {
 					successCount++
