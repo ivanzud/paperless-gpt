@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"net/http"
 	"os"
 	"strings"
 
@@ -259,6 +260,47 @@ func createOpenAIClient(config Config) (llms.Model, error) {
 	return openai.New(options...)
 }
 
+// OllamaHTTPClient returns an HTTP client that injects OLLAMA_HEADERS, or nil when unset.
+func OllamaHTTPClient() *http.Client {
+	raw := os.Getenv("OLLAMA_HEADERS")
+	if raw == "" {
+		return nil
+	}
+
+	headers := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+		if len(parts) != 2 || parts[0] == "" {
+			continue
+		}
+		headers[parts[0]] = parts[1]
+	}
+
+	if len(headers) == 0 {
+		return nil
+	}
+
+	return &http.Client{
+		Transport: &ollamaHeaderTransport{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
+	}
+}
+
+type ollamaHeaderTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *ollamaHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	for key, value := range t.headers {
+		req.Header.Set(key, value)
+	}
+	return t.base.RoundTrip(req)
+}
+
 // createOllamaClient creates a new Ollama vision model client
 func createOllamaClient(config Config) (llms.Model, error) {
 	opts := []ollama.Option{
@@ -267,6 +309,9 @@ func createOllamaClient(config Config) (llms.Model, error) {
 	}
 	if config.OllamaContextLength > 0 {
 		opts = append(opts, ollama.WithRunnerNumCtx(config.OllamaContextLength))
+	}
+	if client := OllamaHTTPClient(); client != nil {
+		opts = append(opts, ollama.WithHTTPClient(client))
 	}
 	return ollama.New(opts...)
 }
