@@ -262,6 +262,12 @@ services:
       - paperless-ngx
 ```
 
+For a deployment that pulls your fork's public GHCR image instead of rebuilding from source, use the checked-in [docker-compose.ghcr.yml](docker-compose.ghcr.yml):
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
 **Pro Tip**: Replace placeholders with real values and read the logs if something looks off.
 
 #### Manual Setup
