@@ -1,0 +1,26 @@
+services:
+  app:
+    image: ghcr.io/ivanzud/paperless-gpt:latest
+    pull_policy: always
+    init: true
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      PUID: ${PUID:-10001}
+      PGID: ${PGID:-10001}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - paperless-gpt-config:/app/config
+      - paperless-gpt-db:/app/db
+      - paperless-gpt-prompts:/app/prompts
+
+volumes:
+  paperless-gpt-config:
+  paperless-gpt-db:
+  paperless-gpt-prompts:
