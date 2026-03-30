@@ -92,7 +92,7 @@ func (p *IOSOCRProvider) ProcessImage(ctx context.Context, imageContent []byte, 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	logger.Debug("Sending request to iOS-OCR-Server")
-	
+
 	// Send request
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -132,10 +132,10 @@ func (p *IOSOCRProvider) ProcessImage(ctx context.Context, imageContent []byte, 
 	}
 
 	logger.WithFields(logrus.Fields{
-		"text_length":    len(ocrResponse.OCRResult),
-		"num_boxes":      len(ocrResponse.OCRBoxes),
-		"image_width":    ocrResponse.ImageWidth,
-		"image_height":   ocrResponse.ImageHeight,
+		"text_length":  len(ocrResponse.OCRResult),
+		"num_boxes":    len(ocrResponse.OCRBoxes),
+		"image_width":  ocrResponse.ImageWidth,
+		"image_height": ocrResponse.ImageHeight,
 	}).Info("Successfully processed image with iOS-OCR-Server")
 
 	// Create OCR result

@@ -63,7 +63,7 @@ func TestGetPromptsHandler(t *testing.T) {
 
 	// Create a dummy prompt file
 	promptContent := "Hello {{.Name}}"
-	os.WriteFile(filepath.Join("prompts", "test_prompt.tmpl"), []byte(promptContent), 0644)
+	require.NoError(t, os.WriteFile(filepath.Join("prompts", "test_prompt.tmpl"), []byte(promptContent), 0644))
 
 	router.GET("/api/prompts", getPromptsHandler)
 
@@ -84,9 +84,9 @@ func TestUpdatePromptsHandler(t *testing.T) {
 	router := setupTestRouter(t)
 
 	// Create a dummy prompt file to be updated
-	os.WriteFile(filepath.Join("prompts", "update_prompt.tmpl"), []byte("Initial content"), 0644)
+	require.NoError(t, os.WriteFile(filepath.Join("prompts", "update_prompt.tmpl"), []byte("Initial content"), 0644))
 	// The setup function already creates the default prompts, so we just need the one we are updating
-	os.WriteFile(filepath.Join("default_prompts", "update_prompt.tmpl"), []byte("Default content"), 0644)
+	require.NoError(t, os.WriteFile(filepath.Join("default_prompts", "update_prompt.tmpl"), []byte("Default content"), 0644))
 
 	router.POST("/api/prompts", updatePromptsHandler)
 

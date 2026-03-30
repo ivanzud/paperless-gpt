@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"

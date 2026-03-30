@@ -206,7 +206,9 @@ func (p *AzureProvider) pollForResults(ctx context.Context, operationLocation st
 
 			var result AzureDocumentResult
 			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				resp.Body.Close()
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					logger.WithError(closeErr).Warn("Failed to close Azure OCR response body after decode error")
+				}
 				logger.WithError(err).Error("Failed to decode response")
 				return nil, fmt.Errorf("error decoding response: %w", err)
 			}

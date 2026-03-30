@@ -27,6 +27,8 @@ import (
 	"github.com/tmc/langchaingo/llms/mistral"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/llms/openai"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"gorm.io/gorm"
 )
 
@@ -101,7 +103,6 @@ var (
 	customFieldTemplate   *template.Template
 	summaryTemplate       *template.Template
 	ocrTemplate           *template.Template
-	adhocAnalysisTemplate *template.Template
 	templateMutex         sync.RWMutex
 
 	// Server-side settings
@@ -836,7 +837,7 @@ func getLikelyLanguage() string {
 	if likelyLanguage == "" {
 		likelyLanguage = "English"
 	}
-	return strings.Title(strings.ToLower(likelyLanguage))
+	return cases.Title(language.English).String(strings.ToLower(likelyLanguage))
 }
 
 // loadTemplates loads templates from files, copying from defaults if they don't exist
@@ -848,7 +849,7 @@ func loadTemplates() error {
 	defaultPromptsDir := "default_prompts"
 
 	// Ensure directories exist
-	if err := os.MkdirAll(promptsDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(promptsDir, 0750); err != nil {
 		return fmt.Errorf("failed to create prompts directory: %w", err)
 	}
 	// The check for default_prompts is now part of the feedback, so we can remove the creation here.
@@ -864,16 +865,18 @@ func loadTemplates() error {
 		// If prompt doesn't exist in prompts dir, copy it from defaults
 		if _, err := os.Stat(promptPath); os.IsNotExist(err) {
 			log.Infof("Prompt '%s' not found, copying from default", name)
+			// #nosec G304 -- template names are fixed by the application and resolved under default_prompts.
 			defaultContent, err := os.ReadFile(defaultPromptPath)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read default prompt '%s': %w", name, err)
 			}
-			if err := os.WriteFile(promptPath, defaultContent, 0644); err != nil {
+			if err := os.WriteFile(promptPath, defaultContent, 0600); err != nil {
 				return nil, fmt.Errorf("failed to write prompt '%s': %w", name, err)
 			}
 		}
 
 		// Read the final prompt content
+		// #nosec G304 -- template names are fixed by the application and resolved under prompts/.
 		content, err := os.ReadFile(promptPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read prompt '%s': %w", name, err)
@@ -921,8 +924,7 @@ func loadTemplates() error {
 	if err != nil {
 		return err
 	}
-	adhocAnalysisTemplate, err = loadTemplate("adhoc-analysis_prompt.tmpl")
-	if err != nil {
+	if _, err = loadTemplate("adhoc-analysis_prompt.tmpl"); err != nil {
 		return err
 	}
 	return nil

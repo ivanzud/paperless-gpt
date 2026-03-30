@@ -71,7 +71,7 @@ func handleOCRRequest(w http.ResponseWriter, r *http.Request) {
 			DocSizeBytes:   1024,
 		},
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func handleFileUploadRequest(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +99,7 @@ func handleFileUploadRequest(w http.ResponseWriter, r *http.Request) {
 		Filename: "document.pdf",
 		Purpose:  "ocr",
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func handleGetSignedURLRequest(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +108,7 @@ func handleGetSignedURLRequest(w http.ResponseWriter, r *http.Request) {
 	}{
 		URL: "https://signed-url-for-file",
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func TestNewMistralOCRProvider(t *testing.T) {

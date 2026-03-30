@@ -82,7 +82,7 @@ func TestIOSOCRProvider_ProcessImage(t *testing.T) {
 		assert.Contains(t, r.Header.Get("Content-Type"), "multipart/form-data")
 
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(mockResponse)
+		_ = json.NewEncoder(w).Encode(mockResponse)
 	}))
 	defer server.Close()
 
@@ -93,9 +93,9 @@ func TestIOSOCRProvider_ProcessImage(t *testing.T) {
 
 	// Test data
 	testImageData := []byte("fake image data")
-	
+
 	result, err := provider.ProcessImage(context.Background(), testImageData, 1)
-	
+
 	require.NoError(t, err)
 	assert.Equal(t, "Test OCR Result\nMultiple lines of text", result.Text)
 	assert.NotNil(t, result.Metadata)
@@ -138,7 +138,7 @@ func TestIOSOCRProvider_ProcessImage_ErrorHandling(t *testing.T) {
 					Message: "Processing failed",
 				}
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(response)
+				_ = json.NewEncoder(w).Encode(response)
 			},
 			expectError:   true,
 			errorContains: "iOS-OCR-Server processing failed",
@@ -182,7 +182,7 @@ func TestIOSOCRProvider_Integration(t *testing.T) {
 
 	provider, err := NewProvider(config)
 	require.NoError(t, err)
-	
+
 	// Verify it's the correct type
 	iosProvider, ok := provider.(*IOSOCRProvider)
 	require.True(t, ok)

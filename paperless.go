@@ -179,6 +179,7 @@ func NewPaperlessClient(baseURL, apiToken string) *PaperlessClient {
 	// Create a custom HTTP transport with TLS configuration
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
+			// #nosec G402 -- this is an explicit user opt-in for self-signed Paperless deployments.
 			InsecureSkipVerify: paperlessInsecureSkipVerify,
 		},
 	}
@@ -229,7 +230,9 @@ func (client *PaperlessClient) Do(ctx context.Context, method, path string, body
 		contentType := resp.Header.Get("Content-Type")
 		if strings.Contains(contentType, "text/html") {
 			bodyBytes, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				log.WithError(err).WithField("url", url).Warn("Failed to close HTML error response body")
+			}
 
 			// Create a new response with the same body for the caller
 			resp = &http.Response{
@@ -933,7 +936,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 								log.Infof("Document %d: Successfully removed auto/manual tag", documentID)
 								// Record this tag change with tag names for both PreviousValue and NewValue
 								mod := ModificationHistory{
-									DocumentID:    uint(documentID),
+									DocumentID:    documentID,
 									ModField:      "tags",
 									PreviousValue: fmt.Sprintf("%v", originalDoc.Tags),
 									NewValue:      fmt.Sprintf("%v", remainingTagNames),
@@ -964,7 +967,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				log.Printf("Document %d: Updated %s from %v to %v", documentID, field, value, updatedFields[field])
 			}
 			mod := ModificationHistory{
-				DocumentID:    uint(documentID),
+				DocumentID:    documentID,
 				ModField:      field,
 				PreviousValue: fmt.Sprintf("%v", value),
 				NewValue:      fmt.Sprintf("%v", updatedFields[field]),
@@ -985,7 +988,7 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 	// Create a directory named after the document ID
 	docDir := filepath.Join(client.GetCacheFolder(), fmt.Sprintf("document-%d", documentID))
 	if _, err := os.Stat(docDir); os.IsNotExist(err) {
-		err = os.MkdirAll(docDir, 0755)
+		err = os.MkdirAll(docDir, 0750)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -1019,7 +1022,9 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 	if err != nil {
 		return nil, 0, err
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		return nil, 0, err
+	}
 
 	doc, err := fitz.New(tmpFile.Name())
 	if err != nil {
@@ -1126,18 +1131,24 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 
 			// Save image to file
 			imagePath := filepath.Join(docDir, fmt.Sprintf("page%03d.jpg", n))
+			// #nosec G304 -- imagePath is generated from an app-controlled cache directory and page index.
 			f, err := os.Create(imagePath)
 			if err != nil {
 				return err
 			}
 
 			if _, err := f.Write(buf.Bytes()); err != nil {
-				f.Close()
+				if closeErr := f.Close(); closeErr != nil {
+					log.WithError(closeErr).WithField("image_path", imagePath).Warn("Failed to close image file after write error")
+				}
 				return err
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				return err
+			}
 
 			// Verify the JPEG file
+			// #nosec G304 -- imagePath is generated from an app-controlled cache directory and page index.
 			file, err := os.Open(imagePath)
 			if err != nil {
 				return err
@@ -1174,7 +1185,7 @@ func (client *PaperlessClient) DownloadDocumentAsPDF(ctx context.Context, docume
 	// Create a directory named after the document ID
 	docDir := filepath.Join(client.GetCacheFolder(), fmt.Sprintf("document-%d-pdf", documentID))
 	if _, err := os.Stat(docDir); os.IsNotExist(err) {
-		err = os.MkdirAll(docDir, 0755)
+		err = os.MkdirAll(docDir, 0750)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -1200,7 +1211,7 @@ func (client *PaperlessClient) DownloadDocumentAsPDF(ctx context.Context, docume
 
 	// Save the original PDF
 	originalPDFPath := filepath.Join(docDir, "original.pdf")
-	err = os.WriteFile(originalPDFPath, pdfData, 0644)
+	err = os.WriteFile(originalPDFPath, pdfData, 0600)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -1216,7 +1227,9 @@ func (client *PaperlessClient) DownloadDocumentAsPDF(ctx context.Context, docume
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		return nil, nil, 0, err
+	}
 
 	doc, err := fitz.New(tmpFile.Name())
 	if err != nil {
@@ -1263,7 +1276,9 @@ func (client *PaperlessClient) DownloadDocumentAsPDF(ctx context.Context, docume
 	files, err := filepath.Glob(filepath.Join(docDir, "original_*.pdf"))
 	if err == nil {
 		for _, file := range files {
-			os.Remove(file)
+			if removeErr := os.Remove(file); removeErr != nil {
+				log.WithError(removeErr).WithField("path", file).Warn("Failed to remove stale split PDF")
+			}
 		}
 	}
 
