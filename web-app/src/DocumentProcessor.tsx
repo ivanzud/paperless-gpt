@@ -29,7 +29,7 @@ export interface GenerateSuggestionsRequest {
 
 export interface CustomFieldSuggestion {
   id: number;
-  value: any;
+  value: unknown;
   name: string;
   isSelected: boolean;
 }

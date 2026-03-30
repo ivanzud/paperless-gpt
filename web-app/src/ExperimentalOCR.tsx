@@ -8,7 +8,7 @@ import { ClientStatus, OCRJobStatus, getStatusViewOptions, mapJobStatus } from '
 type OCRPageResult = {
   text: string;
   ocrLimitHit: boolean;
-  generationInfo?: Record<string, any>;
+  generationInfo?: Record<string, unknown>;
 };
 type OCRCombinedResult = { combinedText: string; perPageResults: OCRPageResult[] };
 
@@ -37,7 +37,7 @@ const ExperimentalOCR: React.FC = () => {
     try {
       await axios.post(`./api/ocr/jobs/${jobId}/stop`);
       setJobStatus('cancelled');
-    } catch (err) {
+    } catch {
       setError('Failed to stop OCR job.');
     }
   };
@@ -111,7 +111,7 @@ const ExperimentalOCR: React.FC = () => {
         let parsedResult: OCRCombinedResult | null = null;
         try {
           parsedResult = JSON.parse(response.data.result);
-        } catch (e) {
+        } catch {
           setOcrResult(response.data.result);
           return;
         }
@@ -188,8 +188,11 @@ const ExperimentalOCR: React.FC = () => {
       if (pageIdx + 1 > lastFetchedPagesDoneRef.current) {
         lastFetchedPagesDoneRef.current = pageIdx + 1;
       }
-    } catch (err: any) {
-      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') {
+    } catch (err: unknown) {
+      if (
+        axios.isAxiosError(err) &&
+        (err.code === 'ERR_CANCELED' || err.name === 'CanceledError')
+      ) {
         setReOcrErrors((prev) => ({
           ...prev,
           [pageIdx]: "Re-OCR cancelled.",

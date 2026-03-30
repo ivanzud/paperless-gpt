@@ -3,11 +3,11 @@ import * as nodeFetch from 'node-fetch';
 
 // Polyfill fetch for Node.js environment
 if (!globalThis.fetch) {
-  (globalThis as any).fetch = nodeFetch.default;
-  (globalThis as any).Headers = nodeFetch.Headers;
-  (globalThis as any).Request = nodeFetch.Request;
-  (globalThis as any).Response = nodeFetch.Response;
-  (globalThis as any).FormData = nodeFetch.FormData;
+  globalThis.fetch = nodeFetch.default as typeof fetch;
+  globalThis.Headers = nodeFetch.Headers as typeof Headers;
+  globalThis.Request = nodeFetch.Request as typeof Request;
+  globalThis.Response = nodeFetch.Response as typeof Response;
+  globalThis.FormData = nodeFetch.FormData as typeof FormData;
 }
 
 async function globalSetup() {
