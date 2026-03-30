@@ -58,7 +58,7 @@ func TestDoclingProvider_ProcessImage(t *testing.T) {
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 			},
 			expectedResult: &OCRResult{
 				Text: "Successfully processed text.",
@@ -93,7 +93,7 @@ func TestDoclingProvider_ProcessImage(t *testing.T) {
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 			},
 			expectedResult: &OCRResult{
 				Text: "# Markdown Content",
@@ -115,7 +115,7 @@ func TestDoclingProvider_ProcessImage(t *testing.T) {
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 			},
 			expectedResult: &OCRResult{
 				Text: "",
@@ -133,7 +133,7 @@ func TestDoclingProvider_ProcessImage(t *testing.T) {
 					Errors: []interface{}{"Some internal docling error"},
 				}
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 			},
 			expectedErrStr: "docling processing failed with status 'failure'",
 		},
@@ -142,7 +142,7 @@ func TestDoclingProvider_ProcessImage(t *testing.T) {
 			mockHandler: func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("this is not json"))
+				_, _ = w.Write([]byte("this is not json"))
 			},
 			expectedErrStr: "error parsing Docling JSON response",
 		},

@@ -18,6 +18,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/gin-gonic/gin"
+	"github.com/tmc/langchaingo/llms"
 )
 
 // getPromptsHandler handles the GET /api/prompts endpoint
@@ -34,6 +35,7 @@ func getPromptsHandler(c *gin.Context) {
 	for _, file := range files {
 		if !file.IsDir() && strings.HasSuffix(file.Name(), ".tmpl") {
 			fullPath := filepath.Join(promptsDir, file.Name())
+			// #nosec G304 -- fullPath is derived from filenames returned by promptsDir directory listing.
 			content, err := os.ReadFile(fullPath)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not read prompt file: %s", file.Name())})
@@ -78,7 +80,7 @@ func updatePromptsHandler(c *gin.Context) {
 	}
 
 	// Write the updated prompt file
-	err = os.WriteFile(promptPath, []byte(req.Content), 0644)
+	err = os.WriteFile(promptPath, []byte(req.Content), 0600)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write prompt file"})
 		log.Errorf("Failed to write prompt file %s: %v", req.Filename, err)
@@ -410,6 +412,7 @@ func (app *App) reOCRPageHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page index or failed to download images"})
 		return
 	}
+	// #nosec G304 -- imagePaths are produced by the app-controlled document image cache.
 	imageContent, err := os.ReadFile(imagePaths[pageIdx])
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read image file"})
@@ -544,8 +547,13 @@ func (app *App) undoModificationHandler(c *gin.Context) {
 		log.Errorf("Invalid modification ID: %v", err)
 		return
 	}
+	if modID < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid modification ID"})
+		log.Errorf("Invalid modification ID: %v", modID)
+		return
+	}
 
-	modification, err := GetModification(app.Database, uint(modID))
+	modification, err := GetModification(app.Database, modID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve modification"})
 		log.Errorf("Failed to retrieve modification: %v", err)
@@ -563,8 +571,8 @@ func (app *App) undoModificationHandler(c *gin.Context) {
 
 	// Make the document suggestions for UpdateDocuments
 	var suggestion DocumentSuggestion
-	suggestion.ID = int(modification.DocumentID)
-	suggestion.OriginalDocument, err = app.Client.GetDocument(ctx, int(modification.DocumentID))
+	suggestion.ID = modification.DocumentID
+	suggestion.OriginalDocument, err = app.Client.GetDocument(ctx, modification.DocumentID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve original document"})
 		log.Errorf("Failed to retrieve original document: %v", err)
@@ -654,7 +662,7 @@ func (app *App) analyzeDocumentsHandler(c *gin.Context) {
 	finalPrompt := promptBuffer.String()
 
 	// Call LLM with the custom prompt and document contexts
-	llmResponse, err := app.LLM.Call(ctx, finalPrompt)
+	llmResponse, err := llms.GenerateFromSinglePrompt(ctx, app.LLM, finalPrompt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error calling LLM"})
 		log.Errorf("Error calling LLM: %v", err)

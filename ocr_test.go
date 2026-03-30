@@ -28,7 +28,7 @@ func TestProcessDocumentOCR_SafetyFeature(t *testing.T) {
 	// Create mock document responses
 	env.setMockResponse(fmt.Sprintf("/api/documents/%d/", documentID), func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(GetDocumentApiResponse{
+		_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
 			ID:    documentID,
 			Title: "Test Document",
 			Tags:  []int{1, 2},
@@ -39,7 +39,7 @@ func TestProcessDocumentOCR_SafetyFeature(t *testing.T) {
 	env.setMockResponse(fmt.Sprintf("/api/documents/%d/download/", documentID), func(w http.ResponseWriter, r *http.Request) {
 		// Just return an empty PDF
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("%PDF-1.5\n"))
+		_, _ = w.Write([]byte("%PDF-1.5\n"))
 	})
 
 	// Create a temporary directory for output
@@ -57,7 +57,7 @@ func TestProcessDocumentOCR_SafetyFeature(t *testing.T) {
 		downloadPath := fmt.Sprintf("/api/documents/%d/download/", documentID)
 		env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("%PDF-1.5\n"))
+			_, _ = w.Write([]byte("%PDF-1.5\n"))
 		})
 
 		// Create mock DownloadDocumentAsImages to simulate different page counts
@@ -65,7 +65,7 @@ func TestProcessDocumentOCR_SafetyFeature(t *testing.T) {
 		env.setMockResponse(downloadImagesPath, func(w http.ResponseWriter, r *http.Request) {
 			// Return successful response but we'll intercept the actual call
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("[]"))
+			_, _ = w.Write([]byte("[]"))
 		})
 
 		// Create two test scenarios
@@ -99,7 +99,7 @@ func TestProcessDocumentOCR_SafetyFeature(t *testing.T) {
 				// We can examine the code flow by checking if app.localPDFPath changes
 				// Clear previous output
 				os.RemoveAll(tempPDFDir)
-				os.MkdirAll(tempPDFDir, 0755)
+				require.NoError(t, os.MkdirAll(tempPDFDir, 0755))
 
 				// Mock logger to avoid console output during tests
 				mockLogger := logrus.New()
@@ -144,7 +144,7 @@ func TestUploadProcessedPDF(t *testing.T) {
 	// Mock document response
 	env.setMockResponse(fmt.Sprintf("/api/documents/%d/", documentID), func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(GetDocumentApiResponse{
+		_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
 			ID:               documentID,
 			Title:            "Test Document",
 			Tags:             []int{1, 2},
@@ -157,7 +157,7 @@ func TestUploadProcessedPDF(t *testing.T) {
 	// Mock tags response
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "tag1"},
 				{"id": 2, "name": "tag2"},
@@ -188,7 +188,7 @@ func TestUploadProcessedPDF(t *testing.T) {
 
 		// Return a task ID
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("\"%s\"", mockTaskID)))
+		_, _ = w.Write([]byte(fmt.Sprintf("\"%s\"", mockTaskID)))
 	})
 
 	// Mock task status endpoint
@@ -197,7 +197,7 @@ func TestUploadProcessedPDF(t *testing.T) {
 		require.Equal(t, mockTaskID, taskID, "Unexpected task ID in status request")
 
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":  "SUCCESS",
 			"task_id": taskID,
 			"result": map[string]interface{}{
@@ -214,7 +214,7 @@ func TestUploadProcessedPDF(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		} else {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(GetDocumentApiResponse{
+			_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
 				ID:               documentID,
 				Title:            "Test Document",
 				Tags:             []int{1, 2},

@@ -59,19 +59,19 @@ func newTestEnv(t *testing.T) *testEnv {
 	// Add mock response for /api/correspondents/
 	env.setMockResponse("/api/correspondents/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"results": [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]}`))
+		_, _ = w.Write([]byte(`{"results": [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]}`))
 	})
 
 	// Add mock response for /api/document_types/
 	env.setMockResponse("/api/document_types/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"results": []}`))
+		_, _ = w.Write([]byte(`{"results": []}`))
 	})
 
 	// Add mock response for /api/custom_fields/
 	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"results": []}`))
+		_, _ = w.Write([]byte(`{"results": []}`))
 	})
 
 	return env
@@ -126,7 +126,7 @@ func TestDo(t *testing.T) {
 		assert.Equal(t, "GET", r.Method)
 		// Send a mock response
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "success"}`))
+		_, _ = w.Write([]byte(`{"message": "success"}`))
 	})
 
 	ctx := context.Background()
@@ -166,10 +166,10 @@ func TestGetAllTags(t *testing.T) {
 		query := r.URL.Query().Get("page")
 		if query == "2" {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(page2)
+			_ = json.NewEncoder(w).Encode(page2)
 		} else {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(page1)
+			_ = json.NewEncoder(w).Encode(page1)
 		}
 	})
 
@@ -209,10 +209,10 @@ func TestGetDocumentCountByTag(t *testing.T) {
 		query := r.URL.Query().Get("name__iexact")
 		if query == "available" {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(data1)
+			_ = json.NewEncoder(w).Encode(data1)
 		} else {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(data2)
+			_ = json.NewEncoder(w).Encode(data2)
 		}
 	})
 
@@ -277,18 +277,18 @@ func TestGetDocumentsByTag(t *testing.T) {
 		expectedQuery := "tags__name__iexact=tag2&page_size=25"
 		assert.Equal(t, expectedQuery, r.URL.RawQuery)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(documentsResponse)
+		_ = json.NewEncoder(w).Encode(documentsResponse)
 	})
 
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		// Handle GetDocumentCountByTag call
 		if nameFilter := r.URL.Query().Get("name__iexact"); nameFilter != "" {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(tagsExactResponse)
+			_ = json.NewEncoder(w).Encode(tagsExactResponse)
 		} else {
 			// Handle GetAllTags call
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(tagsResponse)
+			_ = json.NewEncoder(w).Encode(tagsResponse)
 		}
 	})
 
@@ -360,7 +360,7 @@ func TestGetDocumentsByTagWithEmoji(t *testing.T) {
 		expectedQuery := fmt.Sprintf("tags__name__iexact=%s&page_size=25", url.QueryEscape("🤖 AI-Queue"))
 		assert.Equal(t, expectedQuery, r.URL.RawQuery)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(documentsResponse)
+		_ = json.NewEncoder(w).Encode(documentsResponse)
 	})
 
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
@@ -369,11 +369,11 @@ func TestGetDocumentsByTagWithEmoji(t *testing.T) {
 			// Verify the decoded value matches our emoji tag
 			assert.Equal(t, "🤖 AI-Queue", nameFilter)
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(tagsExactResponse)
+			_ = json.NewEncoder(w).Encode(tagsExactResponse)
 		} else {
 			// Handle GetAllTags call
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(tagsResponse)
+			_ = json.NewEncoder(w).Encode(tagsResponse)
 		}
 	})
 
@@ -414,7 +414,7 @@ func TestDownloadPDF(t *testing.T) {
 	downloadPath := fmt.Sprintf("/api/documents/%d/download/", document.ID)
 	env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(pdfContent)
+		_, _ = w.Write(pdfContent)
 	})
 
 	ctx := context.Background()
@@ -465,7 +465,7 @@ func TestUpdateDocuments(t *testing.T) {
 	// Set mock responses
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(tagsResponse)
+		_ = json.NewEncoder(w).Encode(tagsResponse)
 	})
 
 	updatePath := fmt.Sprintf("/api/documents/%d/", documents[0].ID)
@@ -525,7 +525,7 @@ func TestUpdateDocuments_CreatesMissingSystemTag(t *testing.T) {
 		switch r.Method {
 		case http.MethodGet:
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"results":[{"id":11,"name":"paperless-gpt-ocr-auto"}]}`))
+			_, _ = w.Write([]byte(`{"results":[{"id":11,"name":"paperless-gpt-ocr-auto"}]}`))
 		case http.MethodPost:
 			bodyBytes, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
@@ -537,7 +537,7 @@ func TestUpdateDocuments_CreatesMissingSystemTag(t *testing.T) {
 			assert.Equal(t, pdfOCRCompleteTag, requestBody["name"])
 
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(`{"id":42}`))
+			_, _ = w.Write([]byte(`{"id":42}`))
 		default:
 			t.Fatalf("Unexpected method for /api/tags/: %s", r.Method)
 		}
@@ -650,7 +650,7 @@ func TestUpdateDocuments_RemovingLastTag(t *testing.T) {
 			// Mock tags response
 			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"results": []map[string]interface{}{
 						{"id": 1, "name": "paperless-gpt"},
 					},
@@ -666,7 +666,7 @@ func TestUpdateDocuments_RemovingLastTag(t *testing.T) {
 				if r.Method == "GET" {
 					// Return document state after first update (still has paperless-gpt tag)
 					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
 						"id":                 tt.document.ID,
 						"title":              "New Title", // Title was updated
 						"tags":               []int{1},    // Still has paperless-gpt tag
@@ -734,7 +734,7 @@ func TestDownloadDocumentAsImages(t *testing.T) {
 	downloadPath := fmt.Sprintf("/api/documents/%d/download/", document.ID)
 	env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(pdfContent)
+		_, _ = w.Write(pdfContent)
 	})
 
 	ctx := context.Background()
@@ -771,7 +771,7 @@ func TestDownloadDocumentAsImages_ManyPages(t *testing.T) {
 	downloadPath := fmt.Sprintf("/api/documents/%d/download/", document.ID)
 	env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(pdfContent)
+		_, _ = w.Write(pdfContent)
 	})
 
 	ctx := context.Background()
@@ -810,7 +810,7 @@ func TestDownloadDocumentAsPDF(t *testing.T) {
 	downloadPath := fmt.Sprintf("/api/documents/%d/download/", documentID)
 	env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(pdfContent)
+		_, _ = w.Write(pdfContent)
 	})
 
 	ctx := context.Background()
@@ -860,13 +860,13 @@ func TestGetSimilarDocuments(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}
 
 	// Add required mocks for tags and correspondents that GetSimilarDocuments calls
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "tag1"},
 			},
@@ -897,13 +897,13 @@ func TestGetSimilarDocuments_NoResults(t *testing.T) {
 	env.mockResponses["/api/documents/"] = func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}
 
 	// Add required mocks for tags and correspondents
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{},
 			"next":    nil,
 		})
@@ -922,7 +922,7 @@ func TestGetSimilarDocuments_Error(t *testing.T) {
 	// Add required mocks for tags (since GetSimilarDocuments calls GetAllTags first)
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{},
 			"next":    nil,
 		})
@@ -930,7 +930,7 @@ func TestGetSimilarDocuments_Error(t *testing.T) {
 
 	env.mockResponses["/api/documents/"] = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Internal Server Error"))
+		_, _ = w.Write([]byte("Internal Server Error"))
 	}
 
 	ctx := context.Background()
@@ -947,7 +947,7 @@ func TestGetSimilarDocuments_TagsError(t *testing.T) {
 	// Mock tags endpoint to return an error
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Tags API Error"))
+		_, _ = w.Write([]byte("Tags API Error"))
 	})
 
 	ctx := context.Background()
@@ -994,13 +994,13 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 		receivedQuery = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}
 
 	// Add required mocks for tags (include paperless-gpt tags)
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "regular-tag"},
 				{"id": 2, "name": "paperless-gpt"},      // manualTag
@@ -1063,13 +1063,13 @@ func TestGetSimilarDocuments_NoPaperlessGPTTagsToExclude(t *testing.T) {
 		receivedQuery = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}
 
 	// Add required mocks for tags (no paperless-gpt tags this time)
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "regular-tag"},
 				{"id": 2, "name": "other-tag"},

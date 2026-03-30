@@ -17,15 +17,6 @@ type TestDocument struct {
 	FailUpdate bool // simulate update failure
 }
 
-// Use this for TestCases in your tests
-type TestCase struct {
-	name           string
-	documents      []TestDocument
-	expectedCount  int
-	expectedError  string
-	updateResponse int // HTTP status code for update response
-}
-
 // Test our HTTP-Client
 func TestCreateCustomHTTPClient(t *testing.T) {
 	// Create a test server

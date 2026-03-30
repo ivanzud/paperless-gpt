@@ -150,7 +150,7 @@ func TestAzureProvider_ProcessImage(t *testing.T) {
 				})
 
 				mux.HandleFunc("/operations/123", func(w http.ResponseWriter, r *http.Request) {
-					json.NewEncoder(w).Encode(successResult)
+					_ = json.NewEncoder(w).Encode(successResult)
 				})
 
 				return server

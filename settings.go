@@ -11,18 +11,11 @@ const (
 	settingsFile = "settings.json"
 )
 
-// saveSettings saves the current settings to the settings.json file.
-func saveSettings() error {
-	settingsMutex.Lock()
-	defer settingsMutex.Unlock()
-	return saveSettingsLocked()
-}
-
 // saveSettingsLocked performs the actual saving without locking the mutex.
 // This is to be called from functions that already hold the lock.
 func saveSettingsLocked() error {
 	// Ensure the config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0750); err != nil {
 		return err
 	}
 
@@ -33,7 +26,7 @@ func saveSettingsLocked() error {
 	}
 
 	// Write the file
-	return os.WriteFile(filepath.Join(configDir, settingsFile), data, 0644)
+	return os.WriteFile(filepath.Join(configDir, settingsFile), data, 0600)
 }
 
 // loadSettings loads the settings from settings.json, creating it with defaults if it doesn't exist or is corrupt.
@@ -42,6 +35,7 @@ func loadSettings() {
 	defer settingsMutex.Unlock()
 
 	settingsPath := filepath.Join(configDir, settingsFile)
+	// #nosec G304 -- settingsPath is anchored to the application-owned config directory.
 	data, err := os.ReadFile(settingsPath)
 
 	// Define default settings

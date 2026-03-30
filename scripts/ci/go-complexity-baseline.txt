@@ -1,0 +1,22 @@
+# function|file|max_complexity
+(*App).ProcessDocumentOCR|ocr.go|93
+(*PaperlessClient).UpdateDocuments|paperless.go|91
+validateOrDefaultEnvVars|main.go|80
+main|main.go|37
+(*App).processAutoOcrTagDocuments|background.go|33
+(*App).generateDocumentSuggestions|app_llm.go|33
+(*PaperlessClient).DownloadDocumentAsImages|paperless.go|31
+(*PaperlessClient).DownloadDocumentAsPDF|paperless.go|29
+(*App).uploadProcessedPDF|ocr.go|27
+createLLM|main.go|27
+(*LLMProvider).ProcessImage|ocr/llm_provider.go|23
+(*GoogleAIProvider).GenerateContent|ocr/google_ai_client.go|23
+NewProvider|ocr/provider.go|22
+createVisionLLM|main.go|22
+(*TongyiProvider).GenerateText|app_llm_tongyi.go|22
+(*DoclingProvider).ProcessImage|ocr/docling_provider.go|20
+(*PaperlessClient).GetDocument|paperless.go|18
+(*PaperlessClient).UploadDocument|paperless.go|17
+(*App).getSuggestedCustomFields|app_llm.go|17
+(*PaperlessClient).GetDocumentsByTag|paperless.go|16
+loadTemplates|main.go|16

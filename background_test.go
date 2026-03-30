@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"text/template"
 	"time"
@@ -125,13 +126,13 @@ type OCRTestCase struct {
 // This our appStub for background processing isolation without real invocation
 type appStubBG struct {
 	*App
-	ocrCalls int
-	tagCalls int
+	ocrCalls atomic.Int32
+	tagCalls atomic.Int32
 }
 
 func (a *appStubBG) isOcrEnabled() bool { return true }
 func (a *appStubBG) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
-	a.ocrCalls++
+	a.ocrCalls.Add(1)
 	// Return fixed count for background test
 	if a.App == nil {
 		return 0, nil
@@ -140,7 +141,7 @@ func (a *appStubBG) processAutoOcrTagDocuments(ctx context.Context) (int, error)
 }
 
 func (a *appStubBG) processAutoTagDocuments(ctx context.Context) (int, error) {
-	a.tagCalls++
+	a.tagCalls.Add(1)
 	// Return fixed count for background test
 	if a.App == nil {
 		return 1, nil
@@ -170,18 +171,9 @@ func setupTest(t *testing.T) *testEnv {
 	return env
 }
 
-// Setup a single Test-Case
-func setupTestCase(tc interface{}, env *testEnv) {
-	var documents []TestDocument
-
-	switch t := tc.(type) {
-	case *OCRTestCase:
-		documents = t.documents
-	case TestCase:
-		documents = t.documents
-	default:
-		panic(fmt.Sprintf("unsupported test case type: %T", tc))
-	}
+// Setup a single test case.
+func setupTestCase(tc *OCRTestCase, env *testEnv) {
+	documents := tc.documents
 
 	// Mock the GetAllTags response
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +186,7 @@ func setupTestCase(tc interface{}, env *testEnv) {
 			},
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	})
 
 	// Mock the GetDocumentsByTag response
@@ -225,20 +217,20 @@ func setupTestCase(tc interface{}, env *testEnv) {
 			}
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	})
 
 	// Mock the correspondent creation endpoint
 	env.setMockResponse("/api/correspondents/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":   3,
 				"name": "test response",
 			})
 		} else {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"results": []map[string]interface{}{
 					{"id": 1, "name": "Alpha"},
 					{"id": 2, "name": "Beta"},
@@ -282,7 +274,7 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 				OriginalFileName: "test.pdf",
 			}
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 
@@ -294,7 +286,7 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":      1,
 				"title":   "Test Doc",
 				"content": "test ocr",
@@ -307,7 +299,7 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 	// Mock document download
 	env.setMockResponse("/api/documents/1/download/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("%PDF-1.4\n%test pdf content"))
+		_, _ = w.Write([]byte("%PDF-1.4\n%test pdf content"))
 	})
 
 	// Create stub app without base App for background test
@@ -331,8 +323,8 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 		t.Fatal("background task did not shut down in time")
 	}
 
-	assert.Greater(t, app.ocrCalls, 0, "OCR loop should have run at least once")
-	assert.Greater(t, app.tagCalls, 0, "Tag loop should have run at least once")
+	assert.Greater(t, app.ocrCalls.Load(), int32(0), "OCR loop should have run at least once")
+	assert.Greater(t, app.tagCalls.Load(), int32(0), "Tag loop should have run at least once")
 }
 
 // TestApp extends App with testing capabilities

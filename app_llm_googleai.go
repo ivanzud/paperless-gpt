@@ -68,7 +68,7 @@ func (p *GoogleAIProvider) GenerateText(ctx context.Context, prompt string) (str
 		return "", fmt.Errorf("googleai GenerateContent API returned a candidate with nil content")
 	}
 
-	if candidate.Content.Parts == nil || len(candidate.Content.Parts) == 0 {
+	if len(candidate.Content.Parts) == 0 {
 		return "", fmt.Errorf("googleai GenerateContent API returned a candidate with no content parts")
 	}
 

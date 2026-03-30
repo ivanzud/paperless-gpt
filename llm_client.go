@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
@@ -20,6 +21,16 @@ type RateLimitedLLM struct {
 	backoffScale float64
 }
 
+func retryJitter(backoff time.Duration) time.Duration {
+	var buf [8]byte
+	if _, err := cryptorand.Read(buf[:]); err != nil {
+		return backoff
+	}
+
+	fraction := float64(binary.BigEndian.Uint64(buf[:])) / float64(^uint64(0))
+	return time.Duration(float64(backoff) * (0.8 + 0.4*fraction))
+}
+
 // Call implements the llms.Model interface
 func (r *RateLimitedLLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	if r.rateLimiter != nil {
@@ -32,6 +43,7 @@ func (r *RateLimitedLLM) Call(ctx context.Context, prompt string, options ...llm
 	attempt := 0
 
 	for {
+		//nolint:staticcheck // RateLimitedLLM preserves the legacy Call behavior for callers that still use it.
 		response, err := r.llm.Call(ctx, prompt, options...)
 		if err == nil {
 			return response, nil
@@ -46,12 +58,12 @@ func (r *RateLimitedLLM) Call(ctx context.Context, prompt string, options ...llm
 		}
 
 		// Calculate exponential backoff with jitter
-		backoff := r.backoffMin * time.Duration(1<<uint(attempt))
+		backoff := r.backoffMin * time.Duration(1<<attempt)
 		if backoff > r.backoffMax {
 			backoff = r.backoffMax
 		}
 		// Add jitter by randomly adjusting +/- 20%
-		jitter := time.Duration(float64(backoff) * (0.8 + 0.4*rand.Float64()))
+		jitter := retryJitter(backoff)
 
 		select {
 		case <-ctx.Done():
@@ -139,12 +151,12 @@ func (r *RateLimitedLLM) GenerateContent(ctx context.Context, messages []llms.Me
 		}
 
 		// Calculate exponential backoff with jitter
-		backoff := r.backoffMin * time.Duration(1<<uint(attempt))
+		backoff := r.backoffMin * time.Duration(1<<attempt)
 		if backoff > r.backoffMax {
 			backoff = r.backoffMax
 		}
 		// Add jitter by randomly adjusting +/- 20%
-		jitter := time.Duration(float64(backoff) * (0.8 + 0.4*rand.Float64()))
+		jitter := retryJitter(backoff)
 
 		select {
 		case <-ctx.Done():

@@ -16,7 +16,7 @@ import (
 // ModificationHistory represents the schema of the modification_history table
 type ModificationHistory struct {
 	ID            uint   `gorm:"primaryKey"`             // Auto-incrementing primary key
-	DocumentID    uint   `gorm:"not null"`               // Foreign key to documents table (if applicable)
+	DocumentID    int    `gorm:"not null"`               // Paperless document ID
 	DateChanged   string `gorm:"not null"`               // Date and time of modification
 	ModField      string `gorm:"size:255;not null"`      // Field being modified
 	PreviousValue string `gorm:"size:1048576"`           // Previous value of the field
@@ -40,7 +40,7 @@ type OCRPageResult struct {
 func InitializeDB() *gorm.DB {
 	// Ensure db directory exists
 	dbDir := "db"
-	if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(dbDir, 0750); err != nil {
 		log.Fatalf("Failed to create db directory: %v", err)
 	}
 
@@ -78,8 +78,8 @@ func InsertModification(db *gorm.DB, record *ModificationHistory) error {
 	return result.Error
 }
 
-// GetModification retrieves a modification record by its ID
-func GetModification(db *gorm.DB, id uint) (*ModificationHistory, error) {
+// GetModification retrieves a modification record by its ID.
+func GetModification(db *gorm.DB, id int) (*ModificationHistory, error) {
 	var record ModificationHistory
 	result := db.First(&record, id) // GORM's First method retrieves the first record matching the ID
 	return &record, result.Error

@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"io"
-	"io/fs"
 	"net/http"
 	"path"
 	"strings"
@@ -13,16 +12,6 @@ import (
 
 //go:embed web-app/dist/* web-app/dist/assets/*
 var webappContent embed.FS
-
-// CreateEmbeddedFileServer creates a http.FileSystem from our embedded files
-func createEmbeddedFileServer() http.FileSystem {
-	// Strip the "dist" prefix from the embedded files
-	stripped, err := fs.Sub(webappContent, "web-app/dist")
-	if err != nil {
-		panic(err)
-	}
-	return http.FS(stripped)
-}
 
 // ServeEmbeddedFile serves a file from the embedded filesystem
 func serveEmbeddedFile(c *gin.Context, prefix string, filepath string) {

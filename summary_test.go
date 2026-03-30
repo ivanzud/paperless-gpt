@@ -14,7 +14,7 @@ func TestGetSuggestedSummary(t *testing.T) {
 	mockLLM := &mockLLM{
 		Response: "This document contains financial information for Q3 2023 quarterly report with revenue and expense details.",
 	}
-	
+
 	app := &App{
 		LLM: mockLLM,
 	}
@@ -41,10 +41,10 @@ func TestGenerateDocumentSuggestionsWithSummary(t *testing.T) {
 	mockLLM := &mockLLM{
 		Response: "This is a summary of the test document about financial information.",
 	}
-	
+
 	// Mock client with proper tag/correspondent returns
 	mockClient := &mockPaperlessClient{}
-	
+
 	app := &App{
 		LLM:    mockLLM,
 		Client: mockClient,
