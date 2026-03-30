@@ -309,6 +309,63 @@ func TestGetSuggestedTagsFiltersProcessingTags(t *testing.T) {
 	assert.NotContains(t, mockLLM.lastPrompt, "paperless-gpt-ocr-complete")
 }
 
+func TestCreateNewTagsFiltering(t *testing.T) {
+	testLogger := logrus.WithField("test", "create-new-tags")
+
+	var err error
+	tagTemplate, err = template.New("tag").Parse(testTagTemplate)
+	require.NoError(t, err)
+
+	originalCreateNewTags := createNewTags
+	originalSettings := settings
+	defer func() {
+		createNewTags = originalCreateNewTags
+		settings = originalSettings
+	}()
+
+	ctx := context.Background()
+	availableTags := []string{"invoice", "receipt", "tax"}
+	originalTags := []string{}
+
+	t.Run("default filters out new tags", func(t *testing.T) {
+		createNewTags = false
+		settings = Settings{}
+		mockLLM := &mockLLM{Response: "invoice, new-tag, receipt"}
+		app := &App{LLM: mockLLM}
+
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		require.NoError(t, err)
+		assert.Contains(t, tags, "invoice")
+		assert.Contains(t, tags, "receipt")
+		assert.NotContains(t, tags, "new-tag")
+	})
+
+	t.Run("env flag allows new tags", func(t *testing.T) {
+		createNewTags = true
+		settings = Settings{}
+		mockLLM := &mockLLM{Response: "invoice, new-tag, receipt"}
+		app := &App{LLM: mockLLM}
+
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		require.NoError(t, err)
+		assert.Contains(t, tags, "invoice")
+		assert.Contains(t, tags, "receipt")
+		assert.Contains(t, tags, "new-tag")
+	})
+
+	t.Run("settings flag allows new tags", func(t *testing.T) {
+		createNewTags = false
+		settings = Settings{TagsAutoCreate: true}
+		mockLLM := &mockLLM{Response: "Invoice, NEW-TAG"}
+		app := &App{LLM: mockLLM}
+
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		require.NoError(t, err)
+		assert.Contains(t, tags, "invoice")
+		assert.Contains(t, tags, "NEW-TAG")
+	})
+}
+
 func TestTokenLimitInTitleGeneration(t *testing.T) {
 	testLogger := logrus.WithField("test", "test")
 

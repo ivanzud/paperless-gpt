@@ -149,6 +149,7 @@ services:
     # Use one of these image sources:
     image: icereed/paperless-gpt:latest # Docker Hub
     # image: ghcr.io/icereed/paperless-gpt:latest  # GitHub Container Registry
+    # image: ghcr.io/<your-github-user>/paperless-gpt:latest  # Forks publish to owner-scoped GHCR
     environment:
       PAPERLESS_BASE_URL: "http://paperless-ngx:8000"
       PAPERLESS_API_TOKEN: "your_paperless_api_token"
@@ -588,6 +589,7 @@ For best results with the enhanced OCR features:
 | `GOOGLEAI_API_KEY`                  | Google Gemini API key (required if using `LLM_PROVIDER=googleai`).                                                                                                                            | Cond.    |                            |
 | `GOOGLEAI_THINKING_BUDGET`          | (Optional, googleai only) Integer. Controls Gemini "thinking" budget. If unset, model default is used (thinking enabled if supported). Set to `0` to disable thinking (if model supports it). | No       |                            |
 | `OLLAMA_HOST`                       | Ollama server URL (e.g. `http://host.docker.internal:11434`).                                                                                                                                 | No       |                            |
+| `OLLAMA_HEADERS`                    | Optional comma-separated HTTP headers for Ollama requests, for example `Authorization=Bearer token,X-Forwarded-User=paperless`. Useful when Ollama sits behind an authenticating reverse proxy. | No       |                            |
 | `OLLAMA_THINK`                      | (Optional, Ollama only) Boolean. If set, explicitly enables (`true`) or disables (`false`) Ollama thinking mode for the main LLM. If unset, the parameter is omitted and Ollama defaults apply. | No       |                            |
 | `VISION_OLLAMA_HOST`                | Optional Ollama URL used only for OCR vision requests (`VISION_LLM_PROVIDER=ollama`). Falls back to `VISION_LLM_HOST`, then `OLLAMA_HOST`.                                                   | No       |                            |
 | `VISION_OLLAMA_THINK`               | (Optional, vision Ollama only) Boolean. Overrides `OLLAMA_THINK` for OCR/vision requests when `VISION_LLM_PROVIDER=ollama`. If unset, OCR inherits `OLLAMA_THINK`.                         | No       |                            |
@@ -639,6 +641,7 @@ For best results with the enhanced OCR features:
 | `LISTEN_INTERFACE`                  | Network interface to listen on.                                                                                                                                                               | No       | 8080                       |
 | `AUTO_GENERATE_TITLE`               | Generate titles automatically if `paperless-gpt-auto` is used.                                                                                                                                | No       | true                       |
 | `AUTO_GENERATE_TAGS`                | Generate tags automatically if `paperless-gpt-auto` is used.                                                                                                                                  | No       | true                       |
+| `CREATE_NEW_TAGS`                   | Allow the LLM to suggest and auto-create new tags in paperless-ngx. Default behavior stays conservative: disabled unless explicitly enabled in env or UI settings.                            | No       | false                      |
 | `AUTO_GENERATE_CORRESPONDENTS`      | Generate correspondents automatically if `paperless-gpt-auto` is used.                                                                                                                        | No       | true                       |
 | `AUTO_GENERATE_DOCUMENT_TYPE`       | Generate document types automatically if `paperless-gpt-auto` is used. Only existing document types from paperless-ngx will be used.                                                          | No       | true                       |
 | `AUTO_GENERATE_CREATED_DATE`        | Generate the created dates automatically if `paperless-gpt-auto` is used.                                                                                                                     | No       | true                       |

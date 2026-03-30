@@ -99,6 +99,7 @@ func (app *App) getSuggestedTags(
 		"AvailableTags": availableTags,
 		"OriginalTags":  originalTags,
 		"Title":         suggestedTitle,
+		"CreateNewTags": tagsAutoCreateEnabled(),
 	}
 
 	availableTokens, err := getAvailableTokensForContent(tagTemplate, templateData)
@@ -154,7 +155,30 @@ func (app *App) getSuggestedTags(
 	slices.Sort(suggestedTags)
 	suggestedTags = slices.Compact(suggestedTags)
 
-	// Filter out tags that are not in the available tags list
+	// Filter out tags that are not in the available tags list unless new-tag creation is enabled.
+	if tagsAutoCreateEnabled() {
+		filteredTags := []string{}
+		for _, tag := range suggestedTags {
+			if tag == "" {
+				continue
+			}
+
+			matched := false
+			for _, availableTag := range availableTags {
+				if strings.EqualFold(tag, availableTag) {
+					filteredTags = append(filteredTags, availableTag)
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				filteredTags = append(filteredTags, tag)
+			}
+		}
+		return filteredTags, nil
+	}
+
+	// Filter out tags that are not in the available tags list.
 	filteredTags := []string{}
 	for _, tag := range suggestedTags {
 		for _, availableTag := range availableTags {

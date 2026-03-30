@@ -132,14 +132,31 @@ func (app *App) updateSettingsHandler(c *gin.Context) {
 	settingsMutex.Lock()
 	defer settingsMutex.Unlock()
 
-	var newSettings Settings
-	if err := c.ShouldBindJSON(&newSettings); err != nil {
+	type settingsUpdateRequest struct {
+		CustomFieldsEnable      *bool   `json:"custom_fields_enable"`
+		CustomFieldsSelectedIDs *[]int  `json:"custom_fields_selected_ids"`
+		CustomFieldsWriteMode   *string `json:"custom_fields_write_mode"`
+		TagsAutoCreate          *bool   `json:"tags_auto_create"`
+	}
+
+	var update settingsUpdateRequest
+	if err := c.ShouldBindJSON(&update); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
 		return
 	}
 
-	// Update the global settings variable
-	settings = newSettings
+	if update.CustomFieldsEnable != nil {
+		settings.CustomFieldsEnable = *update.CustomFieldsEnable
+	}
+	if update.CustomFieldsSelectedIDs != nil {
+		settings.CustomFieldsSelectedIDs = *update.CustomFieldsSelectedIDs
+	}
+	if update.CustomFieldsWriteMode != nil {
+		settings.CustomFieldsWriteMode = *update.CustomFieldsWriteMode
+	}
+	if update.TagsAutoCreate != nil {
+		settings.TagsAutoCreate = *update.TagsAutoCreate
+	}
 
 	// Save the updated settings to file
 	if err := saveSettingsLocked(); err != nil {
@@ -148,7 +165,10 @@ func (app *App) updateSettingsHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Settings saved successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"message":  "Settings saved successfully",
+		"settings": settings,
+	})
 }
 
 // getCustomFieldsHandler handles the GET /api/custom_fields endpoint

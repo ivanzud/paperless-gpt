@@ -663,6 +663,18 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					continue
 				}
 
+				if tagsAutoCreateEnabled() {
+					newTagID, err := client.CreateTag(ctx, tagName)
+					if err != nil {
+						log.Warnf("Document %d: Failed to create new tag %q: %v", documentID, tagName, err)
+					} else {
+						log.Infof("Document %d: Created new tag %q with ID %d", documentID, tagName, newTagID)
+						availableTags[tagName] = newTagID
+						finalTagIDs = append(finalTagIDs, newTagID)
+						continue
+					}
+				}
+
 				isSystemTag := tagName == manualTag || tagName == autoTag || tagName == autoOcrTag || tagName == pdfOCRCompleteTag
 				if !isSystemTag {
 					log.Debugf("Document %d: skipping unknown non-system tag %q", documentID, tagName)

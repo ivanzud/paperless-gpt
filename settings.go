@@ -50,6 +50,7 @@ func loadSettings() {
 			CustomFieldsEnable:      false,
 			CustomFieldsSelectedIDs: []int{},
 			CustomFieldsWriteMode:   "append",
+			TagsAutoCreate:          false,
 		}
 	}
 
@@ -77,4 +78,10 @@ func loadSettings() {
 	}
 
 	log.Info("Successfully loaded settings from settings.json")
+}
+
+func tagsAutoCreateEnabled() bool {
+	settingsMutex.RLock()
+	defer settingsMutex.RUnlock()
+	return createNewTags || settings.TagsAutoCreate
 }
