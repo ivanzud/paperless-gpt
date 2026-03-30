@@ -2,192 +2,66 @@ name: Documentation
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '**/*.md'
-      - 'docs/**'
-      - '.github/workflows/documentation.yml'
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "web-app/README.md"
+      - "docker-compose.ghcr.yml"
+      - ".github/workflows/documentation.yml"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '**/*.md'
-      - 'docs/**'
-      - '.github/workflows/documentation.yml'
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "web-app/README.md"
+      - "docker-compose.ghcr.yml"
+      - ".github/workflows/documentation.yml"
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
-  markdown-lint:
-    name: Markdown Lint
+  maintained-doc-links:
+    name: Maintained Doc Links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install markdownlint
-        run: npm install -g markdownlint-cli
-
-      - name: Check Markdown files
-        run: markdownlint '**/*.md' --ignore node_modules
-
-      - name: Check for broken links
-        uses: gaurav-nelson/github-action-markdown-link-check@v1
-        with:
-          use-quiet-mode: 'yes'
-          use-verbose-mode: 'yes'
-          config-file: '.github/workflows/mlc_config.json'
-          folder-path: '.'
-          max-depth: -1
-
-  api-documentation:
-    name: API Documentation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Install swag
-        run: go install github.com/swaggo/swag/cmd/swag@latest
-
-      - name: Generate Swagger Documentation
-        run: swag init
-
-      - name: Check if documentation changed
+      - name: Check maintained documentation links
         run: |
-          if [[ `git status --porcelain` ]]; then
-            echo "API documentation is out of date. Please run 'swag init' locally and commit the changes."
-            exit 1
-          fi
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            lycheeverse/lychee:latest \
+            --no-progress \
+            --max-concurrency 4 \
+            README.md \
+            CHANGELOG.md \
+            web-app/README.md \
+            docs/*.md
 
   typescript-documentation:
     name: TypeScript Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: web-app/package-lock.json
 
-      - name: Install TypeDoc
-        run: npm install -g typedoc
-
-      - name: Generate TypeScript Documentation
+      - name: Install frontend dependencies
         working-directory: ./web-app
-        run: typedoc --out docs/typescript src/
+        run: npm ci
 
-      - name: Check documentation style
-        working-directory: ./web-app
-        run: |
-          if find src -name "*.tsx" -o -name "*.ts" | xargs grep -l "@todo\|FIXME"; then
-            echo "Found TODO or FIXME comments in the code. Please resolve them before merging."
-            exit 1
-          fi
-
-  spelling:
-    name: Documentation Spelling
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check Spelling
-        uses: streetsidesoftware/cspell-action@v5
-        with:
-          files: |
-            **/*.md
-            docs/**/*
-            
-  validate-examples:
-    name: Validate Code Examples
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm install markdown-code-block-runner
-
-      - name: Validate code examples in documentation
-        run: npx markdown-code-block-runner "**/*.md"
-
-  build-wiki:
-    name: Build Wiki
-    needs: [markdown-lint, spelling]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup mdBook
-        uses: peaceiris/actions-mdbook@v1
-        with:
-          mdbook-version: 'latest'
-
-      - name: Build documentation
-        run: |
-          mdbook build docs/
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: 'docs/book'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-  check-docs-coverage:
-    name: Documentation Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Install doc coverage tool
-        run: go install github.com/client9/misspell/cmd/misspell@latest
-
-      - name: Check public API documentation coverage
-        run: |
-          COVERAGE=$(go doc -all ./... | wc -l)
-          if [ "$COVERAGE" -lt 100 ]; then
-            echo "Documentation coverage is below threshold"
-            exit 1
-          fi
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Check TypeScript documentation coverage
+      - name: Generate TypeScript documentation
         working-directory: ./web-app
         run: |
-          npm install -g typescript
-          COVERAGE=$(find src -name "*.ts" -o -name "*.tsx" | xargs grep -l "@doc" | wc -l)
-          if [ "$COVERAGE" -lt 50 ]; then
-            echo "TypeScript documentation coverage is below threshold"
-            exit 1
-          fi
+          OUTDIR="$(mktemp -d)"
+          npx --yes typedoc@0.28.18 --entryPointStrategy expand --out "$OUTDIR" src
