@@ -73,8 +73,14 @@ const AdhocAnalysis: React.FC = () => {
         prompt,
       });
       setAnalysisResult(res.data.result);
-    } catch (err: any) {
-      setError(err.response?.data?.error || err.message || 'An unknown error occurred.');
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.error || err.message || 'An unknown error occurred.');
+      } else if (err instanceof Error) {
+        setError(err.message || 'An unknown error occurred.');
+      } else {
+        setError('An unknown error occurred.');
+      }
     } finally {
       setProcessing(false);
     }
