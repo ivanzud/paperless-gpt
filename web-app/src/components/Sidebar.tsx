@@ -1,7 +1,7 @@
 import { mdiCogOutline, mdiHistory, mdiHomeOutline, mdiTextBoxSearchOutline, mdiFileChartOutline } from "@mdi/js";
 import { Icon } from "@mdi/react";
 import axios from "axios";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import logo from "../assets/logo.svg";
 import "./Sidebar.css";
@@ -24,20 +24,29 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectPage }) => {
 
   // Get whether experimental OCR is enabled
   const [ocrEnabled, setOcrEnabled] = useState(false);
-  const fetchOcrEnabled = useCallback(async () => {
-    try {
-      const res = await axios.get<{ enabled: boolean }>(
-        "./api/experimental/ocr"
-      );
-      setOcrEnabled(res.data.enabled);
-    } catch (err) {
-      console.error(err);
-    }
-  }, []);
 
   useEffect(() => {
-    fetchOcrEnabled();
-  }, [fetchOcrEnabled]);
+    let isMounted = true;
+
+    const fetchOcrEnabled = async () => {
+      try {
+        const res = await axios.get<{ enabled: boolean }>(
+          "./api/experimental/ocr"
+        );
+        if (isMounted) {
+          setOcrEnabled(res.data.enabled);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    void fetchOcrEnabled();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const menuItems = [
     { name: "home", path: "./", icon: mdiHomeOutline, title: "Home" },
