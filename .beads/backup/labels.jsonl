@@ -384,6 +384,8 @@
 {"issue_id":"src-4pr.99","label":"gh"}
 {"issue_id":"src-4pr.99","label":"issue"}
 {"issue_id":"src-4pr.99","label":"upstream"}
+{"issue_id":"src-it9","label":"imported-upstream"}
+{"issue_id":"src-it9","label":"wave-2"}
 {"issue_id":"src-u3m.1","label":"gh"}
 {"issue_id":"src-u3m.1","label":"merge"}
 {"issue_id":"src-u3m.1","label":"pr"}
@@ -476,3 +478,5 @@
 {"issue_id":"src-u3m.9","label":"gh"}
 {"issue_id":"src-u3m.9","label":"merge"}
 {"issue_id":"src-u3m.9","label":"pr"}
+{"issue_id":"src-zom","label":"imported-upstream"}
+{"issue_id":"src-zom","label":"wave-2"}
