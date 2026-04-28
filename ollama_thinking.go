@@ -27,6 +27,11 @@ func parseOptionalBoolEnv(key string) *bool {
 	return &parsed
 }
 
+func parseBoolEnv(key string) bool {
+	parsed := parseOptionalBoolEnv(key)
+	return parsed != nil && *parsed
+}
+
 func resolveVisionOllamaThink() *bool {
 	if visionOllamaThink != nil {
 		return visionOllamaThink

@@ -25,3 +25,14 @@ func TestOllamaThinkingCallOptions_NonOllama(t *testing.T) {
 	enabled := false
 	assert.Nil(t, ollamaThinkingCallOptions("openai", &enabled))
 }
+
+func TestParseBoolEnv(t *testing.T) {
+	t.Setenv("CREATE_NEW_TAGS", "TRUE")
+	assert.True(t, parseBoolEnv("CREATE_NEW_TAGS"))
+
+	t.Setenv("CREATE_NEW_TAGS", "1")
+	assert.True(t, parseBoolEnv("CREATE_NEW_TAGS"))
+
+	t.Setenv("CREATE_NEW_TAGS", "yes")
+	assert.False(t, parseBoolEnv("CREATE_NEW_TAGS"))
+}

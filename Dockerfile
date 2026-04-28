@@ -15,8 +15,8 @@ RUN apk add --no-cache git
 # Copy package.json and package-lock.json
 COPY web-app/package.json web-app/package-lock.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies from the committed lockfile
+RUN npm ci
 
 # Copy the frontend code
 COPY web-app /app/
@@ -34,7 +34,7 @@ WORKDIR /app
 # renovate: datasource=repology depName=alpine_3_21/gcc versioning=loose
 ENV GCC_VERSION="14.2.0-r4"
 # renovate: datasource=repology depName=alpine_3_21/musl-dev versioning=loose
-ENV MUSL_DEV_VERSION="1.2.5-r9"
+ENV MUSL_DEV_VERSION="1.2.5-r11"
 # renovate: datasource=repology depName=alpine_3_21/mupdf versioning=loose
 ENV MUPDF_VERSION="1.24.10-r0"
 # renovate: datasource=repology depName=alpine_3_21/mupdf-dev versioning=loose

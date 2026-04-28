@@ -63,6 +63,7 @@ const DocumentProcessor: React.FC = () => {
   const [suggestions, setSuggestions] = useState<DocumentSuggestion[]>([]);
   const [availableTags, setAvailableTags] = useState<TagOption[]>([]);
   const [allCustomFields, setAllCustomFields] = useState<CustomField[]>([]);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -90,6 +91,7 @@ const DocumentProcessor: React.FC = () => {
       setFilterTag(filterTagRes.data.tag);
       setAllCustomFields(customFieldsRes.data || []);
       setDocuments(documentsRes.data);
+      setSelectedDocumentIds((documentsRes.data || []).map((doc) => doc.id));
       const tags = Object.keys(tagsRes.data).map((tag) => ({
         id: tag,
         name: tag,
@@ -111,8 +113,14 @@ const DocumentProcessor: React.FC = () => {
     setProcessing(true);
     setError(null);
     try {
+      const documentsToProcess = documents.filter((doc) => selectedDocumentIds.includes(doc.id));
+      if (documentsToProcess.length === 0) {
+        setError("Select at least one document to generate suggestions.");
+        return;
+      }
+
       const requestPayload: GenerateSuggestionsRequest = {
-        documents,
+        documents: documentsToProcess,
         generate_titles: generateTitles,
         generate_tags: generateTags,
         generate_correspondents: generateCorrespondents,
@@ -310,12 +318,21 @@ const DocumentProcessor: React.FC = () => {
     try {
       const { data } = await axios.get<Document[]>("./api/documents");
       setDocuments(data);
+      setSelectedDocumentIds((data || []).map((doc) => doc.id));
     } catch (err) {
       console.error("Error reloading documents:", err);
       setError("Failed to reload documents.");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSelectDocument = (documentId: number) => {
+    setSelectedDocumentIds((current) =>
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
+    );
   };
 
   useEffect(() => {
@@ -325,6 +342,7 @@ const DocumentProcessor: React.FC = () => {
         try {
           const { data } = await axios.get<Document[]>("./api/documents");
           setDocuments(data);
+          setSelectedDocumentIds((data || []).map((doc) => doc.id));
         } catch (err) {
           console.error("Error reloading documents:", err);
           setError("Failed to reload documents.");
@@ -365,6 +383,8 @@ const DocumentProcessor: React.FC = () => {
       ) : suggestions.length === 0 ? (
         <DocumentsToProcess
           documents={documents}
+          selectedDocuments={selectedDocumentIds}
+          onSelectDocument={handleSelectDocument}
           generateTitles={generateTitles}
           setGenerateTitles={setGenerateTitles}
           generateTags={generateTags}

@@ -41,9 +41,19 @@ type PaperlessClient struct {
 
 // CustomField represents a custom field from the Paperless-ngx API
 type CustomField struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	DataType string `json:"data_type"`
+	ID        int                  `json:"id"`
+	Name      string               `json:"name"`
+	DataType  string               `json:"data_type"`
+	ExtraData CustomFieldExtraData `json:"extra_data"`
+}
+
+type CustomFieldExtraData struct {
+	SelectOptions []SelectOption `json:"select_options"`
+}
+
+type SelectOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // DocumentType represents a document type from the Paperless-ngx API
@@ -1098,6 +1108,7 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 
 			// Encode to buffer first to measure size
 			buf := &bytes.Buffer{}
+			encodingQuality := jpeg.DefaultQuality
 			if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: jpeg.DefaultQuality}); err != nil {
 				return err
 			}
@@ -1106,6 +1117,7 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 			// More granular steps (85, 80, 75, 70, 65, 60)
 			for q := 85; buf.Len() > imageMaxFileBytes && q >= 60; q -= 5 {
 				buf.Reset()
+				encodingQuality = q
 				if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: q}); err != nil {
 					return err
 				}
@@ -1122,7 +1134,7 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 					int(float64(img.Bounds().Dy())*scale),
 					imaging.Lanczos)
 				buf.Reset()
-				if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: jpeg.DefaultQuality}); err != nil {
+				if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: encodingQuality}); err != nil {
 					return err
 				}
 			}
