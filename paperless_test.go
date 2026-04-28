@@ -93,6 +93,13 @@ func InitializeTestDB() (*gorm.DB, error) {
 	return db, nil
 }
 
+func TestCorrespondentOmitsNilOwner(t *testing.T) {
+	payload, err := json.Marshal(instantiateCorrespondent("Test Correspondent"))
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(payload), `"owner"`)
+}
+
 // teardown closes the mock server
 func (env *testEnv) teardown() {
 	env.server.Close()

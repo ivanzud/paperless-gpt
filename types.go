@@ -137,7 +137,7 @@ type Correspondent struct {
 	MatchingAlgorithm int    `json:"matching_algorithm"`
 	Match             string `json:"match"`
 	IsInsensitive     bool   `json:"is_insensitive"`
-	Owner             *int   `json:"owner"`
+	Owner             *int   `json:"owner,omitempty"`
 	SetPermissions    struct {
 		View struct {
 			Users  []int `json:"users"`

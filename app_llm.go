@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"paperless-gpt/internal/textsanitize"
 	"slices"
@@ -18,6 +19,14 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
 )
+
+func escapeXMLValue(value string) string {
+	var escaped bytes.Buffer
+	if err := xml.EscapeText(&escaped, []byte(value)); err != nil {
+		return value
+	}
+	return escaped.String()
+}
 
 // getSuggestedCorrespondent generates a suggested correspondent for a document using the LLM
 func (app *App) getSuggestedCorrespondent(ctx context.Context, content string, suggestedTitle string, availableCorrespondents []string, correspondentBlackList []string) (string, error) {
@@ -473,7 +482,20 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 	var xmlBuilder strings.Builder
 	xmlBuilder.WriteString("<custom_fields>\n")
 	for _, field := range selectedCustomFields {
-		xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\"></field>\n", field.Name, field.DataType))
+		xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\">", escapeXMLValue(field.Name), escapeXMLValue(field.DataType)))
+		if strings.EqualFold(field.DataType, "select") && len(field.ExtraData.SelectOptions) > 0 {
+			xmlBuilder.WriteString("\n")
+			for _, option := range field.ExtraData.SelectOptions {
+				xmlBuilder.WriteString(fmt.Sprintf(
+					"    <option id=\"%s\">%s</option>\n",
+					escapeXMLValue(option.ID),
+					escapeXMLValue(option.Label),
+				))
+			}
+			xmlBuilder.WriteString("  </field>\n")
+		} else {
+			xmlBuilder.WriteString("</field>\n")
+		}
 	}
 	xmlBuilder.WriteString("</custom_fields>")
 	customFieldsXML := xmlBuilder.String()

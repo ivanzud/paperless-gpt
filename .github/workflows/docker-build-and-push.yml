@@ -43,7 +43,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
         working-directory: web-app
       - name: Build frontend
         run: npm run build && cp -r dist/ ../dist/

@@ -84,6 +84,32 @@ Content: {{.Content}}
 `
 )
 
+func withCustomFieldPrompt(t *testing.T, content string) {
+	t.Helper()
+
+	err := os.MkdirAll("prompts", 0755)
+	require.NoError(t, err)
+
+	promptPath := "prompts/custom_field_prompt.tmpl"
+	originalContent, err := os.ReadFile(promptPath)
+	hadOriginal := err == nil
+	if err != nil {
+		require.True(t, os.IsNotExist(err), "unexpected prompt read error: %v", err)
+	}
+
+	err = os.WriteFile(promptPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		if hadOriginal {
+			require.NoError(t, os.WriteFile(promptPath, originalContent, 0644))
+			return
+		}
+		err := os.Remove(promptPath)
+		require.True(t, err == nil || os.IsNotExist(err), "unexpected prompt cleanup error: %v", err)
+	})
+}
+
 func TestPromptTokenLimits(t *testing.T) {
 	testLogger := logrus.WithField("test", "test")
 
@@ -531,14 +557,9 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 		Client: mockClient,
 	}
 
-	// Create a dummy template file as loadTemplates() will be called
-	err := os.MkdirAll("prompts", 0755)
-	require.NoError(t, err)
-	err = os.WriteFile("prompts/custom_field_prompt.tmpl", []byte("test"), 0644)
-	require.NoError(t, err)
-	defer os.RemoveAll("prompts")
+	withCustomFieldPrompt(t, "test")
 
-	err = loadTemplates()
+	err := loadTemplates()
 	require.NoError(t, err)
 
 	// 2. Define Inputs
@@ -565,6 +586,56 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 	dueDateField, ok := findFieldByID(suggestions, 2)
 	assert.True(t, ok, "Due Date (ID 2) should be in the suggestions")
 	assert.Equal(t, "2025-12-31", dueDateField.Value)
+}
+
+func TestGetSuggestedCustomFieldsIncludesSelectOptions(t *testing.T) {
+	mockedLLMResponse := `[
+	  {
+	    "field": "Category & Type",
+	    "value": "opt-2"
+	  }
+	]`
+
+	mockLLM := &mockLLM{Response: mockedLLMResponse}
+	mockClient := &mockPaperlessClient{
+		CustomFields: []CustomField{
+			{
+				ID:       10,
+				Name:     "Category & Type",
+				DataType: "select",
+				ExtraData: CustomFieldExtraData{
+					SelectOptions: []SelectOption{
+						{ID: "opt-1", Label: "Bills <Old>"},
+						{ID: "opt-2", Label: "Taxes & Fees"},
+					},
+				},
+			},
+		},
+	}
+
+	app := &App{
+		LLM:    mockLLM,
+		Client: mockClient,
+	}
+
+	withCustomFieldPrompt(t, "{{ .CustomFieldsXML }}\n{{ .Content }}")
+
+	err := loadTemplates()
+	require.NoError(t, err)
+
+	originalTokenLimit := tokenLimit
+	tokenLimit = 0
+	t.Cleanup(func() {
+		tokenLimit = originalTokenLimit
+	})
+
+	suggestions, err := app.getSuggestedCustomFields(context.Background(), Document{Content: "Tax receipt"}, []int{10}, logrus.WithField("test", "select-options"))
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	assert.Equal(t, "opt-2", suggestions[0].Value)
+	assert.Contains(t, mockLLM.lastPrompt, `name="Category &amp; Type" type="select"`)
+	assert.Contains(t, mockLLM.lastPrompt, `<option id="opt-1">Bills &lt;Old&gt;</option>`)
+	assert.Contains(t, mockLLM.lastPrompt, `<option id="opt-2">Taxes &amp; Fees</option>`)
 }
 
 // Helper function to find a custom field by ID in a slice
