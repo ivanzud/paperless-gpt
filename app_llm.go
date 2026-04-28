@@ -28,6 +28,34 @@ func escapeXMLValue(value string) string {
 	return escaped.String()
 }
 
+func customFieldsPromptXML(fields []CustomField) string {
+	var xmlBuilder strings.Builder
+	xmlBuilder.WriteString("<custom_fields>\n")
+	for _, field := range fields {
+		writeCustomFieldPromptXML(&xmlBuilder, field)
+	}
+	xmlBuilder.WriteString("</custom_fields>")
+	return xmlBuilder.String()
+}
+
+func writeCustomFieldPromptXML(xmlBuilder *strings.Builder, field CustomField) {
+	xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\">", escapeXMLValue(field.Name), escapeXMLValue(field.DataType)))
+	if !strings.EqualFold(field.DataType, "select") || len(field.ExtraData.SelectOptions) == 0 {
+		xmlBuilder.WriteString("</field>\n")
+		return
+	}
+
+	xmlBuilder.WriteString("\n")
+	for _, option := range field.ExtraData.SelectOptions {
+		xmlBuilder.WriteString(fmt.Sprintf(
+			"    <option id=\"%s\">%s</option>\n",
+			escapeXMLValue(option.ID),
+			escapeXMLValue(option.Label),
+		))
+	}
+	xmlBuilder.WriteString("  </field>\n")
+}
+
 // getSuggestedCorrespondent generates a suggested correspondent for a document using the LLM
 func (app *App) getSuggestedCorrespondent(ctx context.Context, content string, suggestedTitle string, availableCorrespondents []string, correspondentBlackList []string) (string, error) {
 	likelyLanguage := getLikelyLanguage()
@@ -478,27 +506,7 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 		return nil, nil // No fields to process
 	}
 
-	// Generate XML for the prompt
-	var xmlBuilder strings.Builder
-	xmlBuilder.WriteString("<custom_fields>\n")
-	for _, field := range selectedCustomFields {
-		xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\">", escapeXMLValue(field.Name), escapeXMLValue(field.DataType)))
-		if strings.EqualFold(field.DataType, "select") && len(field.ExtraData.SelectOptions) > 0 {
-			xmlBuilder.WriteString("\n")
-			for _, option := range field.ExtraData.SelectOptions {
-				xmlBuilder.WriteString(fmt.Sprintf(
-					"    <option id=\"%s\">%s</option>\n",
-					escapeXMLValue(option.ID),
-					escapeXMLValue(option.Label),
-				))
-			}
-			xmlBuilder.WriteString("  </field>\n")
-		} else {
-			xmlBuilder.WriteString("</field>\n")
-		}
-	}
-	xmlBuilder.WriteString("</custom_fields>")
-	customFieldsXML := xmlBuilder.String()
+	customFieldsXML := customFieldsPromptXML(selectedCustomFields)
 
 	templateMutex.RLock()
 	defer templateMutex.RUnlock()
