@@ -59,7 +59,7 @@ func (c *wholePDFFallbackClient) GetCustomFields(ctx context.Context) ([]CustomF
 	return nil, nil
 }
 
-func (c *wholePDFFallbackClient) CreateTag(ctx context.Context, tagName string) (int, error) {
+func (c *wholePDFFallbackClient) CreateTag(ctx context.Context, tagName string, objPerms *ObjPermissions) (int, error) {
 	return 0, nil
 }
 
@@ -105,6 +105,14 @@ func (c *wholePDFFallbackClient) GetTaskStatus(ctx context.Context, taskID strin
 
 func (c *wholePDFFallbackClient) DeleteDocument(ctx context.Context, documentID int) error {
 	return nil
+}
+
+func (c *wholePDFFallbackClient) GetUiSettings(ctx context.Context) (*UiSettings, error) {
+	return &UiSettings{}, nil
+}
+
+func (c *wholePDFFallbackClient) GetPermissions(ctx context.Context, doc *Document) (*ObjPermissions, error) {
+	return &ObjPermissions{}, nil
 }
 
 type wholePDFFallbackProvider struct {

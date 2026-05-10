@@ -75,7 +75,7 @@ func TestCreateOrGetCorrespondentWithValidMatchingAlgorithm(t *testing.T) {
 	correspondent := instantiateCorrespondent(correspondentName)
 
 	// This should succeed with the fix (matching_algorithm=1)
-	id, err := env.client.CreateOrGetCorrespondent(ctx, correspondent)
+	id, err := env.client.CreateOrGetCorrespondent(ctx, correspondent, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 999, id)
 }

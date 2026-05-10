@@ -64,6 +64,26 @@ func shouldFallbackWholePDF(err error) bool {
 		strings.Contains(msg, "exceeds the limit")
 }
 
+func applyOCRToPDF(processMode string, originalPDFData []byte, hocrDoc interface{}, imageDataList [][]byte, pdfConfig pdfocr.OCRConfig, logger *logrus.Entry) (pdfData []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("apply OCR panicked: %v", r)
+		}
+	}()
+
+	if (processMode == "pdf" || processMode == "whole_pdf") && originalPDFData != nil {
+		logger.Debug("Using ApplyOCR with original PDF data")
+		return pdfocr.ApplyOCR(originalPDFData, hocrDoc, pdfConfig)
+	}
+	if len(imageDataList) > 0 {
+		logger.Debug("Using AssembleWithOCR with image data")
+		return pdfocr.AssembleWithOCR(hocrDoc, imageDataList, pdfConfig)
+	}
+
+	logger.Error("No suitable data available for PDF generation")
+	return nil, fmt.Errorf("no suitable data available for PDF generation")
+}
+
 // ProcessDocumentOCR processes a document through OCR and returns the combined text, hOCR and PDF
 func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options OCROptions, jobID string) (*ProcessedDocument, error) {
 	// Validate options for safety
@@ -481,21 +501,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 						// Set up PDF configuration
 						pdfConfig := pdfocr.DefaultConfig()
 
-						var pdfData []byte
-						var err error
-
-						// For both "pdf" and "whole_pdf" modes, use ApplyOCR with original PDF data
-						if (processMode == "pdf" || processMode == "whole_pdf") && originalPDFData != nil {
-							docLogger.Debug("Using ApplyOCR with original PDF data")
-							pdfData, err = pdfocr.ApplyOCR(originalPDFData, hocrDoc, pdfConfig)
-						} else if len(imageDataList) > 0 {
-							// Only for "image" mode, use AssembleWithOCR with image data
-							docLogger.Debug("Using AssembleWithOCR with image data")
-							pdfData, err = pdfocr.AssembleWithOCR(hocrDoc, imageDataList, pdfConfig)
-						} else {
-							docLogger.Error("No suitable data available for PDF generation")
-							err = fmt.Errorf("no suitable data available for PDF generation")
-						}
+						pdfData, err := applyOCRToPDF(processMode, originalPDFData, hocrDoc, imageDataList, pdfConfig, docLogger)
 
 						if err != nil {
 							docLogger.WithError(err).Error("Failed to apply OCR to PDF")
@@ -574,6 +580,14 @@ func (app *App) savePDFToFile(ctx context.Context, documentID int, pdfData []byt
 	return nil
 }
 
+func (app *App) createOCRCompleteTag(ctx context.Context, originalDoc *Document, logger *logrus.Entry) (int, error) {
+	objPerms, err := app.Client.GetPermissions(ctx, originalDoc)
+	if err != nil {
+		logger.WithError(err).Warn("Could not get permissions for OCR complete tag")
+	}
+	return app.Client.CreateTag(ctx, app.pdfOCRCompleteTag, objPerms)
+}
+
 // Upload PDF to Paperless
 func (app *App) uploadProcessedPDF(ctx context.Context, documentID int, pdfData []byte, options OCROptions, logger *logrus.Entry) error {
 	// Get the original document metadata
@@ -608,7 +622,7 @@ func (app *App) uploadProcessedPDF(ctx context.Context, documentID int, pdfData 
 					tagIDs = append(tagIDs, tagID)
 				} else {
 					// Create the tag if it doesn't exist
-					tagID, err := app.Client.CreateTag(ctx, app.pdfOCRCompleteTag)
+					tagID, err := app.createOCRCompleteTag(ctx, &originalDoc, logger)
 					if err == nil {
 						tagIDs = append(tagIDs, tagID)
 					} else {
@@ -644,7 +658,7 @@ func (app *App) uploadProcessedPDF(ctx context.Context, documentID int, pdfData 
 				metadata["tags"] = []int{tagID}
 			} else {
 				// Create the tag if it doesn't exist
-				tagID, err := app.Client.CreateTag(ctx, app.pdfOCRCompleteTag)
+				tagID, err := app.createOCRCompleteTag(ctx, &originalDoc, logger)
 				if err == nil {
 					metadata["tags"] = []int{tagID}
 				} else {

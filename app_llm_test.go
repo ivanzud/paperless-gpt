@@ -502,7 +502,7 @@ func (m *mockPaperlessClient) GetAllCorrespondents(ctx context.Context) (map[str
 func (m *mockPaperlessClient) GetAllDocumentTypes(ctx context.Context) ([]DocumentType, error) {
 	return nil, nil
 }
-func (m *mockPaperlessClient) CreateTag(ctx context.Context, tagName string) (int, error) {
+func (m *mockPaperlessClient) CreateTag(ctx context.Context, tagName string, objPerms *ObjPermissions) (int, error) {
 	return 0, nil
 }
 func (m *mockPaperlessClient) DownloadDocumentAsImages(ctx context.Context, documentID int, pageLimit int) ([]string, int, error) {
@@ -518,6 +518,12 @@ func (m *mockPaperlessClient) GetTaskStatus(ctx context.Context, taskID string) 
 	return nil, nil
 }
 func (m *mockPaperlessClient) DeleteDocument(ctx context.Context, documentID int) error { return nil }
+func (m *mockPaperlessClient) GetUiSettings(ctx context.Context) (*UiSettings, error) {
+	return &UiSettings{}, nil
+}
+func (m *mockPaperlessClient) GetPermissions(ctx context.Context, doc *Document) (*ObjPermissions, error) {
+	return &ObjPermissions{}, nil
+}
 func (m *mockPaperlessClient) GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error) {
 	if m.Error != nil {
 		return nil, m.Error
@@ -586,6 +592,27 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 	dueDateField, ok := findFieldByID(suggestions, 2)
 	assert.True(t, ok, "Due Date (ID 2) should be in the suggestions")
 	assert.Equal(t, "2025-12-31", dueDateField.Value)
+}
+
+func TestGetSuggestedCustomFieldsNormalizesJSONWhitespace(t *testing.T) {
+	mockedLLMResponse := "[\n\u00a0 {\n\u00a0   \"field\": \"Invoice Number\",\n\u00a0   \"value\": \"INV-12345\"\n\u00a0 }\n]"
+	mockClient := &mockPaperlessClient{
+		CustomFields: []CustomField{
+			{ID: 1, Name: "Invoice Number", DataType: "string"},
+		},
+	}
+	app := &App{
+		LLM:    &mockLLM{Response: mockedLLMResponse},
+		Client: mockClient,
+	}
+
+	withCustomFieldPrompt(t, "test")
+	require.NoError(t, loadTemplates())
+
+	suggestions, err := app.getSuggestedCustomFields(context.Background(), Document{Content: "Invoice INV-12345"}, []int{1}, logrus.WithField("test", "nbsp-json"))
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	assert.Equal(t, "INV-12345", suggestions[0].Value)
 }
 
 func TestGetSuggestedCustomFieldsIncludesSelectOptions(t *testing.T) {

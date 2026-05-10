@@ -98,6 +98,64 @@ func TestCorrespondentOmitsNilOwner(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(payload), `"owner"`)
+	assert.NotContains(t, string(payload), `"set_permissions"`)
+}
+
+func TestGetPermissionsDocumentModeCopiesOwnerAndPermissions(t *testing.T) {
+	originalMode := objPermissions
+	objPermissions = "document"
+	t.Cleanup(func() { objPermissions = originalMode })
+
+	doc := Document{Owner: 7}
+	doc.Permissions.View.Users = []int{7}
+	doc.Permissions.Change.Groups = []int{3}
+
+	client := NewPaperlessClient("http://example.com", "token")
+	perms, err := client.GetPermissions(context.Background(), &doc)
+	require.NoError(t, err)
+
+	require.NotNil(t, perms.Owner)
+	assert.Equal(t, 7, *perms.Owner)
+	require.NotNil(t, perms.SetPermissions)
+	assert.Equal(t, []int{7}, perms.SetPermissions.View.Users)
+	assert.Equal(t, []int{3}, perms.SetPermissions.Change.Groups)
+}
+
+func TestCreateTagAppliesObjectPermissions(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	owner := 7
+	perms := &ObjPermissions{
+		Owner:          &owner,
+		SetPermissions: &SetPermissions{},
+	}
+	perms.SetPermissions.View.Users = []int{7}
+	perms.SetPermissions.Change.Groups = []int{3}
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		defer r.Body.Close()
+
+		var requestBody TagRequest
+		require.NoError(t, json.Unmarshal(bodyBytes, &requestBody))
+		assert.Equal(t, "shared-tag", requestBody.Name)
+		require.NotNil(t, requestBody.Owner)
+		assert.Equal(t, owner, *requestBody.Owner)
+		require.NotNil(t, requestBody.SetPermissions)
+		assert.Equal(t, []int{7}, requestBody.SetPermissions.View.Users)
+		assert.Equal(t, []int{3}, requestBody.SetPermissions.Change.Groups)
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id": 42}`))
+	})
+
+	tagID, err := env.client.CreateTag(context.Background(), "shared-tag", perms)
+	require.NoError(t, err)
+	assert.Equal(t, 42, tagID)
 }
 
 // teardown closes the mock server
@@ -281,7 +339,7 @@ func TestGetDocumentsByTag(t *testing.T) {
 	// Set mock responses
 	env.setMockResponse("/api/documents/", func(w http.ResponseWriter, r *http.Request) {
 		// Verify query parameters
-		expectedQuery := "tags__name__iexact=tag2&page_size=25"
+		expectedQuery := "tags__name__iexact=tag2&page_size=25&full_perms=true"
 		assert.Equal(t, expectedQuery, r.URL.RawQuery)
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(documentsResponse)
@@ -364,7 +422,7 @@ func TestGetDocumentsByTagWithEmoji(t *testing.T) {
 	// Set mock responses
 	env.setMockResponse("/api/documents/", func(w http.ResponseWriter, r *http.Request) {
 		// Verify query parameters - the tag should be URL-encoded
-		expectedQuery := fmt.Sprintf("tags__name__iexact=%s&page_size=25", url.QueryEscape("🤖 AI-Queue"))
+		expectedQuery := fmt.Sprintf("tags__name__iexact=%s&page_size=25&full_perms=true", url.QueryEscape("🤖 AI-Queue"))
 		assert.Equal(t, expectedQuery, r.URL.RawQuery)
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(documentsResponse)
