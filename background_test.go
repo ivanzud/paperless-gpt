@@ -100,6 +100,14 @@ func (m *mockClient) GetSimilarDocuments(ctx context.Context, documentID int, co
 	return nil, nil
 }
 
+func (m *mockClient) GetUiSettings(ctx context.Context) (*UiSettings, error) {
+	return &UiSettings{}, nil
+}
+
+func (m *mockClient) GetPermissions(ctx context.Context, doc *Document) (*ObjPermissions, error) {
+	return &ObjPermissions{}, nil
+}
+
 func (m *mockClient) AddDocument(doc Document, tags []string) {
 	m.documents[doc.ID] = doc
 

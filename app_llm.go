@@ -38,6 +38,18 @@ func customFieldsPromptXML(fields []CustomField) string {
 	return xmlBuilder.String()
 }
 
+func normalizeLLMJSONWhitespace(response string) string {
+	replacer := strings.NewReplacer(
+		"\ufeff", "",
+		"\u00c2\u00a0", " ",
+		"\u00a0", " ",
+		"\u202f", " ",
+		"\u2007", " ",
+		"\u200b", "",
+	)
+	return strings.TrimSpace(replacer.Replace(response))
+}
+
 func writeCustomFieldPromptXML(xmlBuilder *strings.Builder, field CustomField) {
 	xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\">", escapeXMLValue(field.Name), escapeXMLValue(field.DataType)))
 	if !strings.EqualFold(field.DataType, "select") || len(field.ExtraData.SelectOptions) == 0 {
@@ -553,6 +565,7 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 
 	response := textsanitize.StripReasoning(completion.Choices[0].Content)
 	response = stripMarkdown(response)
+	response = normalizeLLMJSONWhitespace(response)
 	logger.Debugf("LLM response for custom fields: %s", response)
 
 	// Temporary struct to unmarshal LLM response with field name
