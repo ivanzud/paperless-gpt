@@ -454,7 +454,7 @@ func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 	// Call getSuggestedCreatedDate
 	ctx := context.Background()
 
-	_, err := app.getSuggestedCreatedDate(ctx, longContent, testLogger)
+	_, err := app.getSuggestedCreatedDate(ctx, longContent, "Example Title", "example.pdf", testLogger)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -464,6 +464,37 @@ func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 
 	// Final prompt should be within token limit
 	assert.LessOrEqual(t, len(tokens), 50, "Final prompt should be within token limit")
+}
+
+func TestCreatedDatePromptIncludesDocumentContext(t *testing.T) {
+	testLogger := logrus.WithField("test", "test")
+	previousTemplate := createdDateTemplate
+	t.Cleanup(func() {
+		createdDateTemplate = previousTemplate
+	})
+
+	var err error
+	createdDateTemplate, err = template.New("created_date").Parse(`
+Title: {{.Title}}
+OriginalFileName: {{.OriginalFileName}}
+Content: {{.Content}}
+`)
+	require.NoError(t, err)
+
+	mockLLM := &mockLLM{Response: "2026-06-17"}
+	app := &App{LLM: mockLLM}
+
+	_, err = app.getSuggestedCreatedDate(
+		context.Background(),
+		"invoice content",
+		"June Invoice",
+		"invoice-june.pdf",
+		testLogger,
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, mockLLM.lastPrompt, "Title: June Invoice")
+	assert.Contains(t, mockLLM.lastPrompt, "OriginalFileName: invoice-june.pdf")
 }
 
 // mockPaperlessClient is a mock implementation of the ClientInterface for testing.

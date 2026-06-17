@@ -712,6 +712,9 @@ Each template has access to specific variables:
 **created_date_prompt.tmpl**:
 
 - `{{.Language}}` - Target language
+- `{{.Today}}` - Current date in YYYY-MM-DD format
+- `{{.Title}}` - Document title
+- `{{.OriginalFileName}}` - Original document file name
 - `{{.Content}}` - Document content text
 
 **custom_field_prompt.tmpl**:
