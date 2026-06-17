@@ -253,6 +253,93 @@ func stripFailedFields(
 	return dropped
 }
 
+func (client *PaperlessClient) patchDocumentFields(ctx context.Context, path string, documentID int, fields map[string]interface{}) (int, []byte, error) {
+	jsonData, err := json.Marshal(fields)
+	if err != nil {
+		return 0, nil, fmt.Errorf("error marshalling JSON for document %d: %w", documentID, err)
+	}
+
+	resp, err := client.Do(ctx, "PATCH", path, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, bodyBytes, nil
+}
+
+func recoverPatchValidationFailure(
+	updatedFields map[string]interface{},
+	originalFields map[string]interface{},
+	bodyBytes []byte,
+	statusCode int,
+	documentID int,
+) ([]string, error) {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
+		return nil, fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
+	}
+
+	lowerBody := strings.ToLower(string(bodyBytes))
+	if _, hasCustomFields := updatedFields["custom_fields"]; hasCustomFields && strings.Contains(lowerBody, "custom") {
+		if remapSelectCustomFieldLabelsFromError(updatedFields, bodyBytes, documentID) {
+			log.Warnf("Document %d: remapped custom-field select labels after validation failure; retrying update.", documentID)
+			return nil, nil
+		}
+	}
+
+	scalarFails, customFieldFails, unrecoverable := parsePaperlessValidationErrors(bodyBytes)
+	if unrecoverable || (len(scalarFails) == 0 && len(customFieldFails) == 0) {
+		return nil, fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
+	}
+
+	newlyDropped := stripFailedFields(updatedFields, originalFields, scalarFails, customFieldFails)
+	if len(newlyDropped) == 0 {
+		return nil, fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
+	}
+
+	return newlyDropped, nil
+}
+
+func (client *PaperlessClient) patchDocumentWithValidationRecovery(
+	ctx context.Context,
+	path string,
+	documentID int,
+	updatedFields map[string]interface{},
+	originalFields map[string]interface{},
+	droppedFields []string,
+) (bool, []string, error) {
+	const maxPatchRetries = 3
+
+	for attempt := 0; attempt <= maxPatchRetries; attempt++ {
+		if len(updatedFields) == 0 {
+			log.Warnf("Document %d: paperless-ngx rejected all suggested fields; skipping update. Dropped fields: %v", documentID, droppedFields)
+			return true, droppedFields, nil
+		}
+
+		statusCode, bodyBytes, err := client.patchDocumentFields(ctx, path, documentID, updatedFields)
+		if err != nil {
+			return false, droppedFields, fmt.Errorf("error updating document %d: %w", documentID, err)
+		}
+		if statusCode == http.StatusOK {
+			return false, droppedFields, nil
+		}
+
+		newlyDropped, err := recoverPatchValidationFailure(updatedFields, originalFields, bodyBytes, statusCode, documentID)
+		if err != nil {
+			return false, droppedFields, err
+		}
+		if len(newlyDropped) == 0 {
+			continue
+		}
+
+		droppedFields = append(droppedFields, newlyDropped...)
+		log.Warnf("Document %d: paperless-ngx rejected fields %v on attempt %d/%d; retrying without them. Raw response: %s", documentID, newlyDropped, attempt+1, maxPatchRetries+1, string(bodyBytes))
+	}
+
+	return false, droppedFields, fmt.Errorf("error updating document %d: paperless-ngx still rejected the update after %d retries; dropped fields: %v", documentID, maxPatchRetries, droppedFields)
+}
+
 func getPaperlessHTTPTimeout() time.Duration {
 	const defaultTimeout = 5 * time.Minute
 
@@ -1025,72 +1112,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		log.Debugf("Document %d: Fields to update: %v", documentID, updatedFields)
 		path := fmt.Sprintf("api/documents/%d/", documentID)
 
-		patchDocument := func(fields map[string]interface{}) (int, []byte, error) {
-			jsonData, err := json.Marshal(fields)
-			if err != nil {
-				return 0, nil, fmt.Errorf("error marshalling JSON for document %d: %w", documentID, err)
-			}
-
-			resp, err := client.Do(ctx, "PATCH", path, bytes.NewBuffer(jsonData))
-			if err != nil {
-				return 0, nil, err
-			}
-			defer resp.Body.Close()
-
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return resp.StatusCode, bodyBytes, nil
+		patchSkipped, partialDroppedFields, err := client.patchDocumentWithValidationRecovery(ctx, path, documentID, updatedFields, originalFields, partialDroppedFields)
+		if err != nil {
+			return err
 		}
-
-		const maxPatchRetries = 3
-		patchSucceeded := false
-		patchSkipped := false
-
-		for attempt := 0; attempt <= maxPatchRetries; attempt++ {
-			if len(updatedFields) == 0 {
-				log.Warnf("Document %d: paperless-ngx rejected all suggested fields; skipping update. Dropped fields: %v", documentID, partialDroppedFields)
-				patchSkipped = true
-				break
-			}
-
-			statusCode, bodyBytes, err := patchDocument(updatedFields)
-			if err != nil {
-				return fmt.Errorf("error updating document %d: %w", documentID, err)
-			}
-			if statusCode == http.StatusOK {
-				patchSucceeded = true
-				break
-			}
-			if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
-				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
-			}
-
-			lowerBody := strings.ToLower(string(bodyBytes))
-			if _, hasCustomFields := updatedFields["custom_fields"]; hasCustomFields && strings.Contains(lowerBody, "custom") {
-				if remapSelectCustomFieldLabelsFromError(updatedFields, bodyBytes, documentID) {
-					log.Warnf("Document %d: remapped custom-field select labels after validation failure; retrying update.", documentID)
-					continue
-				}
-			}
-
-			scalarFails, customFieldFails, unrecoverable := parsePaperlessValidationErrors(bodyBytes)
-			if unrecoverable || (len(scalarFails) == 0 && len(customFieldFails) == 0) {
-				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
-			}
-
-			newlyDropped := stripFailedFields(updatedFields, originalFields, scalarFails, customFieldFails)
-			if len(newlyDropped) == 0 {
-				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
-			}
-
-			partialDroppedFields = append(partialDroppedFields, newlyDropped...)
-			log.Warnf("Document %d: paperless-ngx rejected fields %v on attempt %d/%d; retrying without them. Raw response: %s", documentID, newlyDropped, attempt+1, maxPatchRetries+1, string(bodyBytes))
-		}
-
 		if patchSkipped {
 			continue
-		}
-		if !patchSucceeded {
-			return fmt.Errorf("error updating document %d: paperless-ngx still rejected the update after %d retries; dropped fields: %v", documentID, maxPatchRetries, partialDroppedFields)
 		}
 		if len(partialDroppedFields) > 0 {
 			log.Warnf("Document %d updated partially after dropping invalid fields: %v", documentID, partialDroppedFields)
