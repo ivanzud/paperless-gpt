@@ -887,3 +887,5 @@
 {"actor":"ivanzud","comment":null,"created_at":"2026-03-26T03:41:13Z","event_type":"closed","id":887,"issue_id":"src-6m1","new_value":"Aligned main to fork/main and completed audit fix in e7cda17","old_value":""}
 {"actor":"ivanzud","comment":null,"created_at":"2026-03-26T03:42:01Z","event_type":"created","id":888,"issue_id":"src-inc","new_value":"","old_value":""}
 {"actor":"ivanzud","comment":null,"created_at":"2026-03-30T06:40:49Z","event_type":"created","id":889,"issue_id":"src-e5j","new_value":"","old_value":""}
+{"actor":"ivanzud","comment":null,"created_at":"2026-03-30T06:48:28Z","event_type":"closed","id":890,"issue_id":"src-e5j","new_value":"Completed","old_value":""}
+{"actor":"ivanzud","comment":null,"created_at":"2026-03-30T06:57:12Z","event_type":"closed","id":891,"issue_id":"src-e5j","new_value":"Completed","old_value":""}
