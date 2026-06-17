@@ -565,6 +565,161 @@ func TestUpdateDocuments(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUpdateDocuments_NormalizesMonetaryCustomFields(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{"id":77,"name":"Amount","data_type":"monetary"},{"id":88,"name":"Reference","data_type":"string"}]}`))
+	})
+
+	document := DocumentSuggestion{
+		ID: 1,
+		OriginalDocument: Document{
+			ID:    1,
+			Title: "Invoice",
+		},
+		CustomFieldsWriteMode: "replace",
+		SuggestedCustomFields: []CustomFieldSuggestion{
+			{ID: 77, Name: "Amount", Value: "USD1,053.52"},
+			{ID: 88, Name: "Reference", Value: "USD1,053.52"},
+		},
+	}
+
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		defer r.Body.Close()
+
+		var payload struct {
+			CustomFields []CustomFieldResponse `json:"custom_fields"`
+		}
+		err = json.Unmarshal(bodyBytes, &payload)
+		require.NoError(t, err)
+		require.Len(t, payload.CustomFields, 2)
+
+		assert.Equal(t, 77, payload.CustomFields[0].Field)
+		assert.Equal(t, "USD1053.52", payload.CustomFields[0].Value)
+		assert.Equal(t, 88, payload.CustomFields[1].Field)
+		assert.Equal(t, "USD1,053.52", payload.CustomFields[1].Value)
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	require.NoError(t, err)
+}
+
+func TestUpdateDocuments_DropsInvalidCreatedDateBeforePatch(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+
+	document := DocumentSuggestion{
+		ID: 1,
+		OriginalDocument: Document{
+			ID:          1,
+			Title:       "Old Title",
+			CreatedDate: "2023-01-01",
+		},
+		SuggestedTitle:       "New Title",
+		SuggestedCreatedDate: "2023-01-79",
+	}
+
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		defer r.Body.Close()
+
+		var payload map[string]interface{}
+		err = json.Unmarshal(bodyBytes, &payload)
+		require.NoError(t, err)
+
+		assert.Equal(t, "New Title", payload["title"])
+		assert.NotContains(t, payload, "created_date")
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	require.NoError(t, err)
+}
+
+func TestUpdateDocuments_StripsRejectedCustomFieldAndRetries(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{"id":77,"name":"Valid","data_type":"string"},{"id":88,"name":"Invalid","data_type":"string"}]}`))
+	})
+
+	document := DocumentSuggestion{
+		ID: 1,
+		OriginalDocument: Document{
+			ID:    1,
+			Title: "Old Title",
+		},
+		SuggestedTitle:        "New Title",
+		CustomFieldsWriteMode: "replace",
+		SuggestedCustomFields: []CustomFieldSuggestion{
+			{ID: 77, Name: "Valid", Value: "keep"},
+			{ID: 88, Name: "Invalid", Value: "drop"},
+		},
+	}
+
+	patchCalls := 0
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		patchCalls++
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		defer r.Body.Close()
+
+		var payload struct {
+			Title        string                `json:"title"`
+			CustomFields []CustomFieldResponse `json:"custom_fields"`
+		}
+		err = json.Unmarshal(bodyBytes, &payload)
+		require.NoError(t, err)
+
+		if patchCalls == 1 {
+			require.Len(t, payload.CustomFields, 2)
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"custom_fields":[{},{"value":["Invalid custom field value"]}]}`))
+			return
+		}
+
+		assert.Equal(t, "New Title", payload.Title)
+		require.Len(t, payload.CustomFields, 1)
+		assert.Equal(t, 77, payload.CustomFields[0].Field)
+		assert.Equal(t, "keep", payload.CustomFields[0].Value)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	require.NoError(t, err)
+	assert.Equal(t, 2, patchCalls)
+}
+
 func TestUpdateDocuments_CreatesMissingSystemTag(t *testing.T) {
 	env := newTestEnv(t)
 	defer env.teardown()

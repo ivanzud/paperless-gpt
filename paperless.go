@@ -174,6 +174,85 @@ func parseSelectOptionsFromValidationMessages(messages []string) map[string]stri
 	return options
 }
 
+func parsePaperlessValidationErrors(body []byte) (scalarFields map[string]bool, customFieldIndices []int, unrecoverable bool) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, nil, false
+	}
+
+	scalarFields = make(map[string]bool)
+	for key, val := range raw {
+		switch key {
+		case "tags":
+			return nil, nil, true
+		case "custom_fields":
+			arr, ok := val.([]any)
+			if !ok {
+				return nil, nil, true
+			}
+			for i, entry := range arr {
+				obj, ok := entry.(map[string]any)
+				if !ok || len(obj) == 0 {
+					continue
+				}
+				customFieldIndices = append(customFieldIndices, i)
+			}
+		default:
+			scalarFields[key] = true
+		}
+	}
+
+	if len(scalarFields) == 0 && len(customFieldIndices) == 0 {
+		return nil, nil, false
+	}
+	return scalarFields, customFieldIndices, false
+}
+
+func stripFailedFields(
+	updatedFields map[string]interface{},
+	originalFields map[string]interface{},
+	scalarFields map[string]bool,
+	customFieldIndices []int,
+) []string {
+	var dropped []string
+
+	for field := range scalarFields {
+		if _, present := updatedFields[field]; present {
+			delete(updatedFields, field)
+			delete(originalFields, field)
+			dropped = append(dropped, field)
+		}
+	}
+
+	if len(customFieldIndices) == 0 {
+		return dropped
+	}
+
+	customFields, ok := updatedFields["custom_fields"].([]CustomFieldResponse)
+	if !ok {
+		return dropped
+	}
+
+	sortedIndices := slices.Clone(customFieldIndices)
+	sort.Sort(sort.Reverse(sort.IntSlice(sortedIndices)))
+	for _, idx := range sortedIndices {
+		if idx < 0 || idx >= len(customFields) {
+			continue
+		}
+		dropped = append(dropped, fmt.Sprintf("custom_fields[%d](field_id=%d)", idx, customFields[idx].Field))
+		customFields = append(customFields[:idx], customFields[idx+1:]...)
+	}
+
+	if len(customFields) == 0 {
+		delete(updatedFields, "custom_fields")
+		delete(originalFields, "custom_fields")
+	} else {
+		updatedFields["custom_fields"] = customFields
+	}
+
+	return dropped
+}
+
 func getPaperlessHTTPTimeout() time.Duration {
 	const defaultTimeout = 5 * time.Minute
 
@@ -712,11 +791,28 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		availableDocumentTypes[dt.Name] = dt.ID
 	}
 
+	customFieldTypes := make(map[int]string)
+	for _, document := range documents {
+		if len(document.SuggestedCustomFields) == 0 {
+			continue
+		}
+
+		availableCustomFields, err := client.GetCustomFields(ctx)
+		if err != nil {
+			return fmt.Errorf("error fetching custom fields for normalization: %w", err)
+		}
+		for _, field := range availableCustomFields {
+			customFieldTypes[field.ID] = field.DataType
+		}
+		break
+	}
+
 	for _, document := range documents {
 		documentID := document.ID
 		originalDoc := document.OriginalDocument
 		updatedFields := make(map[string]interface{})
 		originalFields := make(map[string]interface{})
+		var partialDroppedFields []string
 
 		// --- TAGS ---
 		finalTagNames := originalDoc.Tags
@@ -837,12 +933,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		// --- CREATED DATE ---
 		suggestedCreatedDate := document.SuggestedCreatedDate
 		if suggestedCreatedDate != "" {
-			// Validate format YYYY-MM-DD
-			if matched := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(suggestedCreatedDate); matched {
+			if _, err := time.Parse("2006-01-02", suggestedCreatedDate); err == nil {
 				originalFields["created_date"] = document.OriginalDocument.CreatedDate
 				updatedFields["created_date"] = suggestedCreatedDate
 			} else {
-				log.Warnf("Invalid created_date format for document %d: %s. Expected YYYY-MM-DD, skipping.", documentID, suggestedCreatedDate)
+				log.Warnf("Document %d: created_date %q is not a valid YYYY-MM-DD calendar date, skipping. (%v)", documentID, suggestedCreatedDate, err)
+				partialDroppedFields = append(partialDroppedFields, "created_date")
 			}
 		}
 
@@ -862,7 +958,8 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			case "replace":
 				finalCustomFields = []CustomFieldResponse{}
 				for _, sf := range document.SuggestedCustomFields {
-					finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
+					value := normalizeCustomFieldValue(customFieldTypes[sf.ID], sf.Value)
+					finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: value})
 				}
 			case "update":
 				existingFieldsMap := make(map[int]*CustomFieldResponse)
@@ -870,10 +967,11 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					existingFieldsMap[finalCustomFields[i].Field] = &finalCustomFields[i]
 				}
 				for _, sf := range document.SuggestedCustomFields {
+					value := normalizeCustomFieldValue(customFieldTypes[sf.ID], sf.Value)
 					if ef, ok := existingFieldsMap[sf.ID]; ok {
-						ef.Value = sf.Value
+						ef.Value = value
 					} else {
-						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
+						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: value})
 					}
 				}
 			case "append":
@@ -883,7 +981,8 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				}
 				for _, sf := range document.SuggestedCustomFields {
 					if _, exists := existingFieldsMap[sf.ID]; !exists {
-						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
+						value := normalizeCustomFieldValue(customFieldTypes[sf.ID], sf.Value)
+						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: value})
 					}
 				}
 			}
@@ -942,46 +1041,59 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			return resp.StatusCode, bodyBytes, nil
 		}
 
-		statusCode, bodyBytes, err := patchDocument(updatedFields)
-		if err != nil {
-			return fmt.Errorf("error updating document %d: %w", documentID, err)
-		}
+		const maxPatchRetries = 3
+		patchSucceeded := false
+		patchSkipped := false
 
-		if statusCode != http.StatusOK {
-			hasCustomFields := false
-			if _, hasCustomFields = updatedFields["custom_fields"]; hasCustomFields {
-				lowerBody := strings.ToLower(string(bodyBytes))
-				if (statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity) &&
-					strings.Contains(lowerBody, "custom") {
-					// Try to recover select-field values by mapping label -> id from validation hints.
-					if remapSelectCustomFieldLabelsFromError(updatedFields, bodyBytes, documentID) {
-						statusCode, bodyBytes, err = patchDocument(updatedFields)
-						if err != nil {
-							return fmt.Errorf("error retrying update for document %d after select mapping: %w", documentID, err)
-						}
-					}
+		for attempt := 0; attempt <= maxPatchRetries; attempt++ {
+			if len(updatedFields) == 0 {
+				log.Warnf("Document %d: paperless-ngx rejected all suggested fields; skipping update. Dropped fields: %v", documentID, partialDroppedFields)
+				patchSkipped = true
+				break
+			}
 
-					if statusCode != http.StatusOK {
-						log.Warnf("Document %d: custom_fields update failed validation (%d). Retrying update without custom_fields.", documentID, statusCode)
-						delete(updatedFields, "custom_fields")
-						delete(originalFields, "custom_fields")
+			statusCode, bodyBytes, err := patchDocument(updatedFields)
+			if err != nil {
+				return fmt.Errorf("error updating document %d: %w", documentID, err)
+			}
+			if statusCode == http.StatusOK {
+				patchSucceeded = true
+				break
+			}
+			if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
+				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
+			}
 
-						if len(updatedFields) == 0 {
-							log.Warnf("Document %d: only custom_fields update was invalid; skipping custom_fields and continuing.", documentID)
-							continue
-						}
-
-						statusCode, bodyBytes, err = patchDocument(updatedFields)
-						if err != nil {
-							return fmt.Errorf("error retrying update for document %d without custom_fields: %w", documentID, err)
-						}
-					}
+			lowerBody := strings.ToLower(string(bodyBytes))
+			if _, hasCustomFields := updatedFields["custom_fields"]; hasCustomFields && strings.Contains(lowerBody, "custom") {
+				if remapSelectCustomFieldLabelsFromError(updatedFields, bodyBytes, documentID) {
+					log.Warnf("Document %d: remapped custom-field select labels after validation failure; retrying update.", documentID)
+					continue
 				}
 			}
 
-			if statusCode != http.StatusOK {
+			scalarFails, customFieldFails, unrecoverable := parsePaperlessValidationErrors(bodyBytes)
+			if unrecoverable || (len(scalarFails) == 0 && len(customFieldFails) == 0) {
 				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
 			}
+
+			newlyDropped := stripFailedFields(updatedFields, originalFields, scalarFails, customFieldFails)
+			if len(newlyDropped) == 0 {
+				return fmt.Errorf("error updating document %d: %d, %s", documentID, statusCode, string(bodyBytes))
+			}
+
+			partialDroppedFields = append(partialDroppedFields, newlyDropped...)
+			log.Warnf("Document %d: paperless-ngx rejected fields %v on attempt %d/%d; retrying without them. Raw response: %s", documentID, newlyDropped, attempt+1, maxPatchRetries+1, string(bodyBytes))
+		}
+
+		if patchSkipped {
+			continue
+		}
+		if !patchSucceeded {
+			return fmt.Errorf("error updating document %d: paperless-ngx still rejected the update after %d retries; dropped fields: %v", documentID, maxPatchRetries, partialDroppedFields)
+		}
+		if len(partialDroppedFields) > 0 {
+			log.Warnf("Document %d updated partially after dropping invalid fields: %v", documentID, partialDroppedFields)
 		}
 
 		// Check if we need to remove auto/manual tags in a separate update
