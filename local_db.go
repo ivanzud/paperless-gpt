@@ -50,7 +50,7 @@ func InitializeDB() *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: gormlogger.New(stdlog.New(os.Stdout, "", stdlog.LstdFlags), gormlogger.Config{
 			SlowThreshold:             time.Second,
-			LogLevel:                  gormlogger.Warn,
+			LogLevel:                  gormlogger.Silent,
 			IgnoreRecordNotFoundError: true,
 			Colorful:                  false,
 		}),
