@@ -26,6 +26,9 @@ func resetTokenLimit() {
 }
 
 func TestTokenLimit(t *testing.T) {
+	originalTokenLimit := tokenLimit
+	defer func() { tokenLimit = originalTokenLimit }()
+
 	// Save current env and restore after test
 	originalLimit := os.Getenv("TOKEN_LIMIT")
 	defer os.Setenv("TOKEN_LIMIT", originalLimit)
@@ -71,6 +74,9 @@ func TestTokenLimit(t *testing.T) {
 }
 
 func TestGetAvailableTokensForContent(t *testing.T) {
+	originalTokenLimit := tokenLimit
+	defer func() { tokenLimit = originalTokenLimit }()
+
 	// Save current env and restore after test
 	originalLimit := os.Getenv("TOKEN_LIMIT")
 	defer os.Setenv("TOKEN_LIMIT", originalLimit)
@@ -132,6 +138,9 @@ func TestGetAvailableTokensForContent(t *testing.T) {
 }
 
 func TestTruncateContentByTokens(t *testing.T) {
+	originalTokenLimit := tokenLimit
+	defer func() { tokenLimit = originalTokenLimit }()
+
 	// Save current env and restore after test
 	originalLimit := os.Getenv("TOKEN_LIMIT")
 	defer os.Setenv("TOKEN_LIMIT", originalLimit)
@@ -206,6 +215,9 @@ func TestTruncateContentByTokens(t *testing.T) {
 }
 
 func TestTokenLimitIntegration(t *testing.T) {
+	originalTokenLimit := tokenLimit
+	defer func() { tokenLimit = originalTokenLimit }()
+
 	// Save current env and restore after test
 	originalLimit := os.Getenv("TOKEN_LIMIT")
 	defer os.Setenv("TOKEN_LIMIT", originalLimit)

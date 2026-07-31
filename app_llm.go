@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"paperless-gpt/internal/textsanitize"
 	"slices"
@@ -19,54 +18,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
 )
-
-func escapeXMLValue(value string) string {
-	var escaped bytes.Buffer
-	if err := xml.EscapeText(&escaped, []byte(value)); err != nil {
-		return value
-	}
-	return escaped.String()
-}
-
-func customFieldsPromptXML(fields []CustomField) string {
-	var xmlBuilder strings.Builder
-	xmlBuilder.WriteString("<custom_fields>\n")
-	for _, field := range fields {
-		writeCustomFieldPromptXML(&xmlBuilder, field)
-	}
-	xmlBuilder.WriteString("</custom_fields>")
-	return xmlBuilder.String()
-}
-
-func normalizeLLMJSONWhitespace(response string) string {
-	replacer := strings.NewReplacer(
-		"\ufeff", "",
-		"\u00c2\u00a0", " ",
-		"\u00a0", " ",
-		"\u202f", " ",
-		"\u2007", " ",
-		"\u200b", "",
-	)
-	return strings.TrimSpace(replacer.Replace(response))
-}
-
-func writeCustomFieldPromptXML(xmlBuilder *strings.Builder, field CustomField) {
-	xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\">", escapeXMLValue(field.Name), escapeXMLValue(field.DataType)))
-	if !strings.EqualFold(field.DataType, "select") || len(field.ExtraData.SelectOptions) == 0 {
-		xmlBuilder.WriteString("</field>\n")
-		return
-	}
-
-	xmlBuilder.WriteString("\n")
-	for _, option := range field.ExtraData.SelectOptions {
-		xmlBuilder.WriteString(fmt.Sprintf(
-			"    <option id=\"%s\">%s</option>\n",
-			escapeXMLValue(option.ID),
-			escapeXMLValue(option.Label),
-		))
-	}
-	xmlBuilder.WriteString("  </field>\n")
-}
 
 // getSuggestedCorrespondent generates a suggested correspondent for a document using the LLM
 func (app *App) getSuggestedCorrespondent(ctx context.Context, content string, suggestedTitle string, availableCorrespondents []string, correspondentBlackList []string) (string, error) {
@@ -114,7 +65,7 @@ func (app *App) getSuggestedCorrespondent(ctx context.Context, content string, s
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	}, mainLLMCallOptions()...)
+	})
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
 	}
@@ -140,7 +91,6 @@ func (app *App) getSuggestedTags(
 	availableTags = removeTagFromList(availableTags, manualTag)
 	availableTags = removeTagFromList(availableTags, autoTag)
 	availableTags = removeTagFromList(availableTags, autoOcrTag)
-	availableTags = removeTagFromList(availableTags, pdfOCRCompleteTag)
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
@@ -148,7 +98,7 @@ func (app *App) getSuggestedTags(
 		"AvailableTags": availableTags,
 		"OriginalTags":  originalTags,
 		"Title":         suggestedTitle,
-		"CreateNewTags": tagsAutoCreateEnabled(),
+		"CreateNewTags": createNewTags,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(tagTemplate, templateData)
@@ -185,7 +135,7 @@ func (app *App) getSuggestedTags(
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	}, mainLLMCallOptions()...)
+	})
 	if err != nil {
 		logger.Errorf("Error getting response from LLM: %v", err)
 		return nil, fmt.Errorf("error getting response from LLM: %v", err)
@@ -204,30 +154,29 @@ func (app *App) getSuggestedTags(
 	slices.Sort(suggestedTags)
 	suggestedTags = slices.Compact(suggestedTags)
 
-	// Filter out tags that are not in the available tags list unless new-tag creation is enabled.
-	if tagsAutoCreateEnabled() {
+	// Filter out tags that are not in the available tags list (unless CREATE_NEW_TAGS is enabled)
+	if createNewTags {
+		// When creating new tags is enabled, keep all non-empty suggested tags
 		filteredTags := []string{}
 		for _, tag := range suggestedTags {
-			if tag == "" {
-				continue
-			}
-
-			matched := false
-			for _, availableTag := range availableTags {
-				if strings.EqualFold(tag, availableTag) {
-					filteredTags = append(filteredTags, availableTag)
-					matched = true
-					break
+			if tag != "" {
+				// Use the available tag's casing if it exists
+				matched := false
+				for _, availableTag := range availableTags {
+					if strings.EqualFold(tag, availableTag) {
+						filteredTags = append(filteredTags, availableTag)
+						matched = true
+						break
+					}
 				}
-			}
-			if !matched {
-				filteredTags = append(filteredTags, tag)
+				if !matched {
+					filteredTags = append(filteredTags, tag)
+				}
 			}
 		}
 		return filteredTags, nil
 	}
 
-	// Filter out tags that are not in the available tags list.
 	filteredTags := []string{}
 	for _, tag := range suggestedTags {
 		for _, availableTag := range availableTags {
@@ -294,7 +243,7 @@ func (app *App) getSuggestedDocumentType(
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	}, mainLLMCallOptions()...)
+	})
 	if err != nil {
 		logger.Errorf("Error getting response from LLM: %v", err)
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
@@ -317,33 +266,17 @@ func (app *App) getSuggestedDocumentType(
 }
 
 // getSuggestedTitle generates a suggested title for a document using the LLM
-func (app *App) getSuggestedTitle(ctx context.Context, documentID int, content string, originalTitle string, logger *logrus.Entry) (string, error) {
+func (app *App) getSuggestedTitle(ctx context.Context, content string, originalTitle string, logger *logrus.Entry) (string, error) {
 	likelyLanguage := getLikelyLanguage()
 
 	templateMutex.RLock()
 	defer templateMutex.RUnlock()
 
-	var similarDocumentTitles []string
-	if app.Client != nil && documentID > 0 {
-		similarDocuments, err := app.Client.GetSimilarDocuments(ctx, documentID, 5)
-		if err != nil {
-			logger.WithError(err).Debug("Failed to fetch similar documents for title generation")
-		} else {
-			for _, doc := range similarDocuments {
-				title := strings.TrimSpace(doc.Title)
-				if title != "" {
-					similarDocumentTitles = append(similarDocumentTitles, title)
-				}
-			}
-		}
-	}
-
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language":              likelyLanguage,
-		"Content":               content,
-		"Title":                 originalTitle,
-		"SimilarDocumentTitles": similarDocumentTitles,
+		"Language": likelyLanguage,
+		"Content":  content,
+		"Title":    originalTitle,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(titleTemplate, templateData)
@@ -380,7 +313,7 @@ func (app *App) getSuggestedTitle(ctx context.Context, documentID int, content s
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	}, mainLLMCallOptions()...)
+	})
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
 	}
@@ -389,7 +322,7 @@ func (app *App) getSuggestedTitle(ctx context.Context, documentID int, content s
 }
 
 // getSuggestedCreatedDate generates a suggested createdDate for a document using the LLM
-func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, title string, originalFileName string, logger *logrus.Entry) (string, error) {
+func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, logger *logrus.Entry) (string, error) {
 	likelyLanguage := getLikelyLanguage()
 
 	templateMutex.RLock()
@@ -397,11 +330,9 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, tit
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language":         likelyLanguage,
-		"Content":          content,
-		"Today":            getTodayDate(), // must be in YYYY-MM-DD format
-		"Title":            title,
-		"OriginalFileName": originalFileName,
+		"Language": likelyLanguage,
+		"Content":  content,
+		"Today":    getTodayDate(), // must be in YYYY-MM-DD format
 	}
 
 	availableTokens, err := getAvailableTokensForContent(createdDateTemplate, templateData)
@@ -438,7 +369,7 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, tit
 			},
 			Role: llms.ChatMessageTypeHuman,
 		},
-	}, mainLLMCallOptions()...)
+	})
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
 	}
@@ -446,56 +377,22 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, tit
 	return strings.TrimSpace(strings.Trim(result, "\"")), nil
 }
 
-// getSuggestedSummary generates a suggested summary for a document using the LLM.
-func (app *App) getSuggestedSummary(ctx context.Context, content string, title string, logger *logrus.Entry) (string, error) {
-	likelyLanguage := getLikelyLanguage()
+var xmlAttrEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	`"`, "&quot;",
+	"'", "&apos;",
+	"<", "&lt;",
+	">", "&gt;",
+)
 
-	templateMutex.RLock()
-	defer templateMutex.RUnlock()
+var xmlTextEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+)
 
-	templateData := map[string]interface{}{
-		"Language": likelyLanguage,
-		"Title":    title,
-	}
-
-	availableTokens, err := getAvailableTokensForContent(summaryTemplate, templateData)
-	if err != nil {
-		logger.Errorf("Error calculating available tokens: %v", err)
-		return "", fmt.Errorf("error calculating available tokens: %v", err)
-	}
-
-	truncatedContent, err := truncateContentByTokens(content, availableTokens)
-	if err != nil {
-		logger.Errorf("Error truncating content: %v", err)
-		return "", fmt.Errorf("error truncating content: %v", err)
-	}
-
-	var promptBuffer bytes.Buffer
-	templateData["Content"] = truncatedContent
-	err = summaryTemplate.Execute(&promptBuffer, templateData)
-	if err != nil {
-		return "", fmt.Errorf("error executing summary template: %v", err)
-	}
-
-	prompt := promptBuffer.String()
-	logger.Debugf("Summary suggestion prompt: %s", prompt)
-
-	completion, err := app.LLM.GenerateContent(ctx, []llms.MessageContent{
-		{
-			Parts: []llms.ContentPart{
-				llms.TextContent{
-					Text: prompt,
-				},
-			},
-			Role: llms.ChatMessageTypeHuman,
-		},
-	}, mainLLMCallOptions()...)
-	if err != nil {
-		return "", fmt.Errorf("error getting response from LLM: %v", err)
-	}
-	result := textsanitize.StripReasoning(completion.Choices[0].Content)
-	return strings.TrimSpace(strings.Trim(result, "\"")), nil
-}
+func escapeXMLAttr(s string) string { return xmlAttrEscaper.Replace(s) }
+func escapeXMLText(s string) string { return xmlTextEscaper.Replace(s) }
 
 // getSuggestedCustomFields generates suggested custom fields for a document using the LLM
 func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, selectedFieldIDs []int, logger *logrus.Entry) ([]CustomFieldSuggestion, error) {
@@ -520,7 +417,22 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 		return nil, nil // No fields to process
 	}
 
-	customFieldsXML := customFieldsPromptXML(selectedCustomFields)
+	// Generate XML for the prompt
+	var xmlBuilder strings.Builder
+	xmlBuilder.WriteString("<custom_fields>\n")
+	for _, field := range selectedCustomFields {
+		if field.DataType == "select" && len(field.ExtraData.SelectOptions) > 0 {
+			xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\">\n", escapeXMLAttr(field.Name), escapeXMLAttr(field.DataType)))
+			for _, opt := range field.ExtraData.SelectOptions {
+				xmlBuilder.WriteString(fmt.Sprintf("    <option id=\"%s\">%s</option>\n", escapeXMLAttr(opt.ID), escapeXMLText(opt.Label)))
+			}
+			xmlBuilder.WriteString("  </field>\n")
+		} else {
+			xmlBuilder.WriteString(fmt.Sprintf("  <field name=\"%s\" type=\"%s\"></field>\n", escapeXMLAttr(field.Name), escapeXMLAttr(field.DataType)))
+		}
+	}
+	xmlBuilder.WriteString("</custom_fields>")
+	customFieldsXML := xmlBuilder.String()
 
 	templateMutex.RLock()
 	defer templateMutex.RUnlock()
@@ -560,14 +472,13 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 				llms.TextContent{Text: prompt},
 			},
 		},
-	}, mainLLMCallOptions()...)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error getting response from LLM for custom fields: %v", err)
 	}
 
 	response := textsanitize.StripReasoning(completion.Choices[0].Content)
 	response = stripMarkdown(response)
-	response = normalizeLLMJSONWhitespace(response)
 	logger.Debugf("LLM response for custom fields: %s", response)
 
 	// Temporary struct to unmarshal LLM response with field name
@@ -610,45 +521,271 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 	return finalSuggestedFields, nil
 }
 
-// generateDocumentSuggestions generates suggestions for a set of documents
-func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionRequest GenerateSuggestionsRequest, logger *logrus.Entry) ([]DocumentSuggestion, error) {
-	// Fetch all available tags from paperless-ngx
-	availableTagsMap, err := app.Client.GetAllTags(ctx)
+// getSuggestedSummary generates a concise summary for a document.
+func (app *App) getSuggestedSummary(ctx context.Context, content string, title string, logger *logrus.Entry) (string, error) {
+	templateMutex.RLock()
+	defer templateMutex.RUnlock()
+
+	templateData := map[string]interface{}{
+		"Language": getLikelyLanguage(),
+		"Title":    title,
+	}
+	availableTokens, err := getAvailableTokensForContent(summaryTemplate, templateData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch available tags: %v", err)
+		return "", fmt.Errorf("error calculating available tokens for summary: %v", err)
 	}
 
-	// Prepare a list of tag names
-	availableTagNames := make([]string, 0, len(availableTagsMap))
-	for tagName := range availableTagsMap {
-		if tagName == manualTag {
-			continue
+	truncatedContent, err := truncateContentByTokens(content, availableTokens)
+	if err != nil {
+		return "", fmt.Errorf("error truncating content for summary: %v", err)
+	}
+
+	var promptBuffer bytes.Buffer
+	templateData["Content"] = truncatedContent
+	if err := summaryTemplate.Execute(&promptBuffer, templateData); err != nil {
+		return "", fmt.Errorf("error executing summary template: %v", err)
+	}
+
+	prompt := promptBuffer.String()
+	logger.Debugf("Summary suggestion prompt: %s", prompt)
+	completion, err := app.LLM.GenerateContent(ctx, []llms.MessageContent{{
+		Role: llms.ChatMessageTypeHuman,
+		Parts: []llms.ContentPart{
+			llms.TextContent{Text: prompt},
+		},
+	}}, mainLLMCallOptions()...)
+	if err != nil {
+		return "", fmt.Errorf("error getting response from LLM: %v", err)
+	}
+	if len(completion.Choices) == 0 {
+		return "", fmt.Errorf("LLM returned no choices for summary")
+	}
+
+	result := textsanitize.StripReasoning(completion.Choices[0].Content)
+	return strings.TrimSpace(strings.Trim(result, "\"")), nil
+}
+
+// suggestionGenerationContext carries the paperless-ngx metadata that suggestion
+// generation needs, fetched once per request instead of once per document.
+type suggestionGenerationContext struct {
+	availableTagNames           []string
+	availableCorrespondentNames []string
+	availableDocumentTypeNames  []string
+}
+
+// prepareSuggestionGenerationContext fetches only the metadata the request actually
+// asks for, so e.g. a titles-only run does not depend on the tags endpoint.
+func (app *App) prepareSuggestionGenerationContext(ctx context.Context, suggestionRequest GenerateSuggestionsRequest) (suggestionGenerationContext, error) {
+	generationContext := suggestionGenerationContext{}
+
+	if suggestionRequest.GenerateTags {
+		availableTagsMap, err := app.Client.GetAllTags(ctx)
+		if err != nil {
+			return suggestionGenerationContext{}, fmt.Errorf("failed to fetch available tags: %v", err)
 		}
-		availableTagNames = append(availableTagNames, tagName)
+		generationContext.availableTagNames = make([]string, 0, len(availableTagsMap))
+		for tagName := range availableTagsMap {
+			if tagName == manualTag {
+				continue
+			}
+			generationContext.availableTagNames = append(generationContext.availableTagNames, tagName)
+		}
 	}
 
-	// Prepare a list of document correspodents
-	availableCorrespondentsMap, err := app.Client.GetAllCorrespondents(ctx)
+	if suggestionRequest.GenerateCorrespondents {
+		availableCorrespondentsMap, err := app.Client.GetAllCorrespondents(ctx)
+		if err != nil {
+			return suggestionGenerationContext{}, fmt.Errorf("failed to fetch available correspondents: %v", err)
+		}
+		generationContext.availableCorrespondentNames = make([]string, 0, len(availableCorrespondentsMap))
+		for correspondentName := range availableCorrespondentsMap {
+			generationContext.availableCorrespondentNames = append(generationContext.availableCorrespondentNames, correspondentName)
+		}
+	}
+
+	if suggestionRequest.GenerateDocumentTypes {
+		availableDocumentTypes, err := app.Client.GetAllDocumentTypes(ctx)
+		if err != nil {
+			return suggestionGenerationContext{}, fmt.Errorf("failed to fetch available document types: %v", err)
+		}
+		generationContext.availableDocumentTypeNames = make([]string, 0, len(availableDocumentTypes))
+		for _, docType := range availableDocumentTypes {
+			generationContext.availableDocumentTypeNames = append(generationContext.availableDocumentTypeNames, docType.Name)
+		}
+	}
+
+	return generationContext, nil
+}
+
+// generateSingleDocumentSuggestion runs the requested generators for one document.
+func (app *App) generateSingleDocumentSuggestion(ctx context.Context, suggestionRequest GenerateSuggestionsRequest, doc Document, generationContext suggestionGenerationContext, logger *logrus.Entry) (DocumentSuggestion, error) {
+	documentID := doc.ID
+	docLogger := documentLogger(documentID)
+	startTime := time.Now()
+	docLogger.Printf("Processing Document ID %d...", documentID)
+
+	content := sanitize.Sanitize(doc.Content)
+	suggestedTitle := doc.Title
+	var suggestedTags []string
+	var suggestedCorrespondent string
+	var suggestedDocumentType string
+	var suggestedCreatedDate string
+	var suggestedCustomFields []CustomFieldSuggestion
+	var suggestedSummary string
+	var err error
+
+	if suggestionRequest.GenerateTitles {
+		suggestedTitle, err = app.getSuggestedTitle(ctx, content, suggestedTitle, docLogger)
+		if err != nil {
+			docLogger.Errorf("Error processing document %d: %v", documentID, err)
+			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+		}
+	}
+
+	if suggestionRequest.GenerateTags {
+		suggestedTags, err = app.getSuggestedTags(ctx, content, suggestedTitle, generationContext.availableTagNames, doc.Tags, docLogger)
+		if err != nil {
+			logger.Errorf("Error generating tags for document %d: %v", documentID, err)
+			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+		}
+	}
+
+	if suggestionRequest.GenerateCorrespondents {
+		suggestedCorrespondent, err = app.getSuggestedCorrespondent(ctx, content, suggestedTitle, generationContext.availableCorrespondentNames, correspondentBlackList)
+		if err != nil {
+			log.Errorf("Error generating correspondents for document %d: %v", documentID, err)
+			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+		}
+	}
+
+	if suggestionRequest.GenerateDocumentTypes {
+		if len(generationContext.availableDocumentTypeNames) == 0 {
+			docLogger.Debug("Document type generation is enabled, but no document types are available in paperless-ngx.")
+		} else {
+			suggestedDocumentType, err = app.getSuggestedDocumentType(ctx, content, suggestedTitle, generationContext.availableDocumentTypeNames, docLogger)
+			if err != nil {
+				log.Errorf("Error generating document type for document %d: %v", documentID, err)
+				return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+			}
+		}
+	}
+
+	if suggestionRequest.GenerateCreatedDate {
+		suggestedCreatedDate, err = app.getSuggestedCreatedDate(ctx, content, docLogger)
+		if err != nil {
+			log.Errorf("Error generating createdDate for document %d: %v", documentID, err)
+			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+		}
+	}
+
+	if suggestionRequest.GenerateCustomFields {
+		settingsMutex.RLock()
+		selectedIDs := settings.CustomFieldsSelectedIDs
+		settingsMutex.RUnlock()
+
+		if len(selectedIDs) == 0 {
+			log.Warnf("Custom field generation is enabled, but no custom fields are selected in the settings. Please select at least one custom field for this feature to work.")
+		} else {
+			suggestedCustomFields, err = app.getSuggestedCustomFields(ctx, doc, selectedIDs, docLogger)
+			if err != nil {
+				log.Errorf("Error generating custom fields for document %d: %v", documentID, err)
+				return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+			}
+		}
+	}
+
+	if suggestionRequest.GenerateSummary {
+		suggestedSummary, err = app.getSuggestedSummary(ctx, content, suggestedTitle, docLogger)
+		if err != nil {
+			log.Errorf("Error generating summary for document %d: %v", documentID, err)
+			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
+		}
+	}
+
+	suggestion := DocumentSuggestion{
+		ID:               documentID,
+		OriginalDocument: doc,
+	}
+	settingsMutex.RLock()
+	suggestion.CustomFieldsWriteMode = settings.CustomFieldsWriteMode
+	suggestion.CustomFieldsEnable = settings.CustomFieldsEnable
+	settingsMutex.RUnlock()
+
+	// Titles
+	if suggestionRequest.GenerateTitles {
+		docLogger.Printf("Suggested title for document %d: %s", documentID, suggestedTitle)
+		suggestion.SuggestedTitle = suggestedTitle
+	} else {
+		suggestion.SuggestedTitle = doc.Title
+	}
+
+	// Tags
+	if suggestionRequest.GenerateTags {
+		docLogger.Printf("Suggested tags for document %d: %v", documentID, suggestedTags)
+		suggestion.SuggestedTags = suggestedTags
+	} else {
+		suggestion.SuggestedTags = doc.Tags
+	}
+
+	// Correspondents
+	if suggestionRequest.GenerateCorrespondents {
+		log.Printf("Suggested correspondent for document %d: %s", documentID, suggestedCorrespondent)
+		suggestion.SuggestedCorrespondent = suggestedCorrespondent
+	} else {
+		suggestion.SuggestedCorrespondent = ""
+	}
+
+	// Document Type
+	if suggestionRequest.GenerateDocumentTypes {
+		log.Printf("Suggested document type for document %d: %s", documentID, suggestedDocumentType)
+		suggestion.SuggestedDocumentType = suggestedDocumentType
+	} else {
+		suggestion.SuggestedDocumentType = ""
+	}
+
+	// CreatedDate
+	if suggestionRequest.GenerateCreatedDate {
+		log.Printf("Suggested createdDate for document %d: %s", documentID, suggestedCreatedDate)
+		suggestion.SuggestedCreatedDate = suggestedCreatedDate
+	} else {
+		suggestion.SuggestedCreatedDate = ""
+	}
+
+	// Custom Fields
+	if suggestionRequest.GenerateCustomFields {
+		log.Printf("Suggested custom fields for document %d: %v", documentID, suggestedCustomFields)
+		suggestion.SuggestedCustomFields = suggestedCustomFields
+	}
+
+	if suggestionRequest.GenerateSummary {
+		log.Printf("Suggested summary for document %d: %s", documentID, suggestedSummary)
+		suggestion.SuggestedSummary = suggestedSummary
+	}
+
+	// Remove manual tag from the list of suggested tags
+	suggestion.RemoveTags = []string{manualTag, autoTag}
+
+	// Add auto-processing complete tag if configured (only for auto-processing, not manual review)
+	if app.autoTagComplete != "" && suggestionRequest.IsAutoProcessing {
+		suggestion.AddTags = append(suggestion.AddTags, app.autoTagComplete)
+		docLogger.Debugf("Adding auto-processing complete tag '%s'", app.autoTagComplete)
+	}
+
+	elapsed := time.Since(startTime)
+	// Format as HH:MM:SS using UTC zero-time base.
+	runtime := time.Unix(0, elapsed.Nanoseconds()).UTC()
+	docLogger.Printf("Document %d processed successfully. Runtime: %s",
+		documentID, runtime.Format("15:04:05"))
+
+	return suggestion, nil
+}
+
+// generateDocumentSuggestions generates suggestions for a set of documents in parallel.
+// Any document error fails the whole request (legacy synchronous behavior).
+func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionRequest GenerateSuggestionsRequest, logger *logrus.Entry) ([]DocumentSuggestion, error) {
+	generationContext, err := app.prepareSuggestionGenerationContext(ctx, suggestionRequest)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch available correspondents: %v", err)
-	}
-
-	// Prepare a list of correspondent names
-	availableCorrespondentNames := make([]string, 0, len(availableCorrespondentsMap))
-	for correspondentName := range availableCorrespondentsMap {
-		availableCorrespondentNames = append(availableCorrespondentNames, correspondentName)
-	}
-
-	// Fetch all available document types from paperless-ngx
-	availableDocumentTypes, err := app.Client.GetAllDocumentTypes(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch available document types: %v", err)
-	}
-
-	// Prepare a list of document type names
-	availableDocumentTypeNames := make([]string, 0, len(availableDocumentTypes))
-	for _, docType := range availableDocumentTypes {
-		availableDocumentTypeNames = append(availableDocumentTypeNames, docType.Name)
+		return nil, err
 	}
 
 	documents := suggestionRequest.Documents
@@ -662,180 +799,14 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 		wg.Add(1)
 		go func(doc Document) {
 			defer wg.Done()
-			documentID := doc.ID
-			docLogger := documentLogger(documentID)
-			startTime := time.Now()
-			docLogger.Printf("Processing Document ID %d...", documentID)
-
-			content := sanitize.Sanitize(doc.Content)
-			suggestedTitle := doc.Title
-			var suggestedTags []string
-			var suggestedCorrespondent string
-			var suggestedDocumentType string
-			var suggestedCreatedDate string
-			var suggestedCustomFields []CustomFieldSuggestion
-			var suggestedSummary string
-
-			if suggestionRequest.GenerateTitles {
-				suggestedTitle, err = app.getSuggestedTitle(ctx, doc.ID, content, suggestedTitle, docLogger)
-				if err != nil {
-					mu.Lock()
-					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-					mu.Unlock()
-					docLogger.Errorf("Error processing document %d: %v", documentID, err)
-					return
-				}
-			}
-
-			if suggestionRequest.GenerateTags {
-				suggestedTags, err = app.getSuggestedTags(ctx, content, suggestedTitle, availableTagNames, doc.Tags, docLogger)
-				if err != nil {
-					mu.Lock()
-					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-					mu.Unlock()
-					logger.Errorf("Error generating tags for document %d: %v", documentID, err)
-					return
-				}
-			}
-
-			if suggestionRequest.GenerateCorrespondents {
-				suggestedCorrespondent, err = app.getSuggestedCorrespondent(ctx, content, suggestedTitle, availableCorrespondentNames, correspondentBlackList)
-				if err != nil {
-					mu.Lock()
-					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-					mu.Unlock()
-					log.Errorf("Error generating correspondents for document %d: %v", documentID, err)
-					return
-				}
-			}
-
-			if suggestionRequest.GenerateDocumentTypes {
-				if len(availableDocumentTypeNames) == 0 {
-					docLogger.Debug("Document type generation is enabled, but no document types are available in paperless-ngx.")
-				} else {
-					suggestedDocumentType, err = app.getSuggestedDocumentType(ctx, content, suggestedTitle, availableDocumentTypeNames, docLogger)
-					if err != nil {
-						mu.Lock()
-						errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-						mu.Unlock()
-						log.Errorf("Error generating document type for document %d: %v", documentID, err)
-						return
-					}
-				}
-			}
-
-			if suggestionRequest.GenerateCreatedDate {
-				suggestedCreatedDate, err = app.getSuggestedCreatedDate(ctx, content, suggestedTitle, doc.OriginalFileName, docLogger)
-				if err != nil {
-					mu.Lock()
-					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-					mu.Unlock()
-					log.Errorf("Error generating createdDate for document %d: %v", documentID, err)
-					return
-				}
-			}
-
-			if suggestionRequest.GenerateCustomFields {
-				settingsMutex.RLock()
-				selectedIDs := settings.CustomFieldsSelectedIDs
-				settingsMutex.RUnlock()
-
-				if len(selectedIDs) == 0 {
-					log.Warnf("Custom field generation is enabled, but no custom fields are selected in the settings. Please select at least one custom field for this feature to work.")
-				} else {
-					suggestedCustomFields, err = app.getSuggestedCustomFields(ctx, doc, selectedIDs, docLogger)
-					if err != nil {
-						mu.Lock()
-						errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-						mu.Unlock()
-						log.Errorf("Error generating custom fields for document %d: %v", documentID, err)
-						return
-					}
-				}
-			}
-
-			if suggestionRequest.GenerateSummary {
-				suggestedSummary, err = app.getSuggestedSummary(ctx, content, suggestedTitle, docLogger)
-				if err != nil {
-					mu.Lock()
-					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
-					mu.Unlock()
-					log.Errorf("Error generating summary for document %d: %v", documentID, err)
-					return
-				}
-			}
-
+			suggestion, err := app.generateSingleDocumentSuggestion(ctx, suggestionRequest, doc, generationContext, logger)
 			mu.Lock()
-			suggestion := DocumentSuggestion{
-				ID:               documentID,
-				OriginalDocument: doc,
+			defer mu.Unlock()
+			if err != nil {
+				errorsList = append(errorsList, err)
+				return
 			}
-			settingsMutex.RLock()
-			suggestion.CustomFieldsWriteMode = settings.CustomFieldsWriteMode
-			suggestion.CustomFieldsEnable = settings.CustomFieldsEnable
-			settingsMutex.RUnlock()
-			// Titles
-			if suggestionRequest.GenerateTitles {
-				docLogger.Printf("Suggested title for document %d: %s", documentID, suggestedTitle)
-				suggestion.SuggestedTitle = suggestedTitle
-			} else {
-				suggestion.SuggestedTitle = doc.Title
-			}
-
-			// Tags
-			if suggestionRequest.GenerateTags {
-				docLogger.Printf("Suggested tags for document %d: %v", documentID, suggestedTags)
-				suggestion.SuggestedTags = suggestedTags
-			} else {
-				suggestion.SuggestedTags = doc.Tags
-			}
-
-			// Correspondents
-			if suggestionRequest.GenerateCorrespondents {
-				log.Printf("Suggested correspondent for document %d: %s", documentID, suggestedCorrespondent)
-				suggestion.SuggestedCorrespondent = suggestedCorrespondent
-			} else {
-				suggestion.SuggestedCorrespondent = ""
-			}
-
-			// Document Type
-			if suggestionRequest.GenerateDocumentTypes {
-				log.Printf("Suggested document type for document %d: %s", documentID, suggestedDocumentType)
-				suggestion.SuggestedDocumentType = suggestedDocumentType
-			} else {
-				suggestion.SuggestedDocumentType = ""
-			}
-
-			// CreatedDate
-			if suggestionRequest.GenerateCreatedDate {
-				log.Printf("Suggested createdDate for document %d: %s", documentID, suggestedCreatedDate)
-				suggestion.SuggestedCreatedDate = suggestedCreatedDate
-			} else {
-				suggestion.SuggestedCreatedDate = ""
-			}
-
-			// Custom Fields
-			if suggestionRequest.GenerateCustomFields {
-				log.Printf("Suggested custom fields for document %d: %v", documentID, suggestedCustomFields)
-				suggestion.SuggestedCustomFields = suggestedCustomFields
-			}
-
-			if suggestionRequest.GenerateSummary {
-				log.Printf("Suggested summary for document %d: %s", documentID, suggestedSummary)
-				suggestion.SuggestedSummary = suggestedSummary
-			}
-
-			// Remove manual tag from the list of suggested tags
-			suggestion.RemoveTags = []string{manualTag, autoTag}
-
 			documentSuggestions = append(documentSuggestions, suggestion)
-			mu.Unlock()
-
-			elapsed := time.Since(startTime)
-			// Format as HH:MM:SS using UTC zero-time base.
-			runtime := time.Unix(0, elapsed.Nanoseconds()).UTC()
-			docLogger.Printf("Document %d processed successfully. Runtime: %s",
-				documentID, runtime.Format("15:04:05"))
 		}(documents[i])
 	}
 
@@ -846,6 +817,39 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 	}
 
 	return documentSuggestions, nil
+}
+
+// generateDocumentSuggestionsForJob processes documents sequentially so an async job can
+// report per-document progress. A document that fails is recorded and skipped; a cancelled
+// or timed-out context aborts the whole job.
+func (app *App) generateDocumentSuggestionsForJob(ctx context.Context, suggestionRequest GenerateSuggestionsRequest, jobID string, logger *logrus.Entry) ([]DocumentSuggestion, []SuggestionJobDocumentFailure, error) {
+	generationContext, err := app.prepareSuggestionGenerationContext(ctx, suggestionRequest)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	documentSuggestions := make([]DocumentSuggestion, 0, len(suggestionRequest.Documents))
+	failures := []SuggestionJobDocumentFailure{}
+	for index, doc := range suggestionRequest.Documents {
+		if err := ctx.Err(); err != nil {
+			return documentSuggestions, failures, err
+		}
+		suggestionJobStore.updateProgress(jobID, index, doc.ID)
+
+		suggestion, err := app.generateSingleDocumentSuggestion(ctx, suggestionRequest, doc, generationContext, logger)
+		if err != nil {
+			if ctx.Err() != nil {
+				return documentSuggestions, failures, ctx.Err()
+			}
+			failures = append(failures, SuggestionJobDocumentFailure{DocumentID: doc.ID, DocumentTitle: doc.Title, Error: err.Error()})
+			logger.Errorf("Suggestion job %s: document %d failed: %v", jobID, doc.ID, err)
+		} else {
+			documentSuggestions = append(documentSuggestions, suggestion)
+		}
+		suggestionJobStore.updateProgress(jobID, index+1, 0)
+	}
+
+	return documentSuggestions, failures, nil
 }
 
 // getTodayDate returns the current date in YYYY-MM-DD format

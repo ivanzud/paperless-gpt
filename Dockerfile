@@ -25,21 +25,21 @@ COPY web-app /app/
 RUN npm run build
 
 # Stage 2: Build the Go binary
-FROM docker.io/golang:1.25.5-alpine3.21 AS builder
+FROM docker.io/golang:1.25.12-alpine3.23 AS builder
 
 # Set the working directory inside the container
 WORKDIR /app
 
 # Package versions for Renovate
-# renovate: datasource=repology depName=alpine_3_21/gcc versioning=loose
-ENV GCC_VERSION="14.2.0-r4"
-# renovate: datasource=repology depName=alpine_3_21/musl-dev versioning=loose
-ENV MUSL_DEV_VERSION="1.2.5-r11"
-# renovate: datasource=repology depName=alpine_3_21/mupdf versioning=loose
-ENV MUPDF_VERSION="1.24.10-r0"
-# renovate: datasource=repology depName=alpine_3_21/mupdf-dev versioning=loose
-ENV MUPDF_DEV_VERSION="1.24.10-r0"
-# renovate: datasource=repology depName=alpine_3_21/sed versioning=loose
+# renovate: datasource=repology depName=alpine_3_23/gcc versioning=loose
+ENV GCC_VERSION="15.2.0-r2"
+# renovate: datasource=repology depName=alpine_3_23/musl-dev versioning=loose
+ENV MUSL_DEV_VERSION="1.2.5-r23"
+# renovate: datasource=repology depName=alpine_3_23/mupdf versioning=loose
+ENV MUPDF_VERSION="1.26.11-r0"
+# renovate: datasource=repology depName=alpine_3_23/mupdf-dev versioning=loose
+ENV MUPDF_DEV_VERSION="1.26.11-r0"
+# renovate: datasource=repology depName=alpine_3_23/sed versioning=loose
 ENV SED_VERSION="4.9-r2"
 
 # Install necessary packages with pinned versions
