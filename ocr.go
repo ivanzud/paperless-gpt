@@ -675,7 +675,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 // TODO: Implement a proper solution to store this alongside the document in Paperless
 func (app *App) saveHOCRToFile(documentID int, hOCR string) error {
 	// Ensure the directory exists
-	if err := os.MkdirAll(app.localHOCRPath, 0755); err != nil {
+	if err := os.MkdirAll(app.localHOCRPath, 0750); err != nil {
 		return fmt.Errorf("failed to create HOCR output directory: %w", err)
 	}
 
@@ -684,7 +684,7 @@ func (app *App) saveHOCRToFile(documentID int, hOCR string) error {
 	filePath := filepath.Join(app.localHOCRPath, filename)
 
 	// Write the HOCR to the file
-	if err := os.WriteFile(filePath, []byte(hOCR), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(hOCR), 0600); err != nil {
 		return fmt.Errorf("failed to write HOCR file: %w", err)
 	}
 
@@ -694,7 +694,7 @@ func (app *App) saveHOCRToFile(documentID int, hOCR string) error {
 // savePDFToFile saves the PDF data to a file
 func (app *App) savePDFToFile(ctx context.Context, documentID int, pdfData []byte) error {
 	// Ensure the directory exists
-	if err := os.MkdirAll(app.localPDFPath, 0755); err != nil {
+	if err := os.MkdirAll(app.localPDFPath, 0750); err != nil {
 		return fmt.Errorf("failed to create PDF output directory: %w", err)
 	}
 
@@ -705,7 +705,7 @@ func (app *App) savePDFToFile(ctx context.Context, documentID int, pdfData []byt
 	filePath := filepath.Join(app.localPDFPath, filename)
 
 	// Write the PDF to the file
-	if err := os.WriteFile(filePath, pdfData, 0644); err != nil {
+	if err := os.WriteFile(filePath, pdfData, 0600); err != nil {
 		return fmt.Errorf("failed to write PDF file: %w", err)
 	}
 

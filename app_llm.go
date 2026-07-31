@@ -19,6 +19,22 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+type similarDocumentsClient interface {
+	GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error)
+}
+
+func normalizeLLMJSONWhitespace(response string) string {
+	replacer := strings.NewReplacer(
+		"\ufeff", "",
+		"\u00c2\u00a0", " ",
+		"\u00a0", " ",
+		"\u202f", " ",
+		"\u2007", " ",
+		"\u200b", "",
+	)
+	return strings.TrimSpace(replacer.Replace(response))
+}
+
 // getSuggestedCorrespondent generates a suggested correspondent for a document using the LLM
 func (app *App) getSuggestedCorrespondent(ctx context.Context, content string, suggestedTitle string, availableCorrespondents []string, correspondentBlackList []string) (string, error) {
 	likelyLanguage := getLikelyLanguage()
@@ -91,6 +107,8 @@ func (app *App) getSuggestedTags(
 	availableTags = removeTagFromList(availableTags, manualTag)
 	availableTags = removeTagFromList(availableTags, autoTag)
 	availableTags = removeTagFromList(availableTags, autoOcrTag)
+	availableTags = removeTagFromList(availableTags, pdfOCRCompleteTag)
+	allowNewTags := tagsAutoCreateEnabled()
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
@@ -98,7 +116,7 @@ func (app *App) getSuggestedTags(
 		"AvailableTags": availableTags,
 		"OriginalTags":  originalTags,
 		"Title":         suggestedTitle,
-		"CreateNewTags": createNewTags,
+		"CreateNewTags": allowNewTags,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(tagTemplate, templateData)
@@ -154,8 +172,8 @@ func (app *App) getSuggestedTags(
 	slices.Sort(suggestedTags)
 	suggestedTags = slices.Compact(suggestedTags)
 
-	// Filter out tags that are not in the available tags list (unless CREATE_NEW_TAGS is enabled)
-	if createNewTags {
+	// Filter out tags that are not in the available tags list unless new-tag creation is enabled.
+	if allowNewTags {
 		// When creating new tags is enabled, keep all non-empty suggested tags
 		filteredTags := []string{}
 		for _, tag := range suggestedTags {
@@ -266,17 +284,32 @@ func (app *App) getSuggestedDocumentType(
 }
 
 // getSuggestedTitle generates a suggested title for a document using the LLM
-func (app *App) getSuggestedTitle(ctx context.Context, content string, originalTitle string, logger *logrus.Entry) (string, error) {
+func (app *App) getSuggestedTitle(ctx context.Context, documentID int, content string, originalTitle string, logger *logrus.Entry) (string, error) {
 	likelyLanguage := getLikelyLanguage()
+
+	var similarDocumentTitles []string
+	if client, ok := app.Client.(similarDocumentsClient); ok && documentID > 0 {
+		similarDocuments, err := client.GetSimilarDocuments(ctx, documentID, 5)
+		if err != nil {
+			logger.WithError(err).Debug("Failed to fetch similar documents for title generation")
+		} else {
+			for _, doc := range similarDocuments {
+				if title := strings.TrimSpace(doc.Title); title != "" {
+					similarDocumentTitles = append(similarDocumentTitles, title)
+				}
+			}
+		}
+	}
 
 	templateMutex.RLock()
 	defer templateMutex.RUnlock()
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language": likelyLanguage,
-		"Content":  content,
-		"Title":    originalTitle,
+		"Language":              likelyLanguage,
+		"Content":               content,
+		"Title":                 originalTitle,
+		"SimilarDocumentTitles": similarDocumentTitles,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(titleTemplate, templateData)
@@ -322,7 +355,7 @@ func (app *App) getSuggestedTitle(ctx context.Context, content string, originalT
 }
 
 // getSuggestedCreatedDate generates a suggested createdDate for a document using the LLM
-func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, logger *logrus.Entry) (string, error) {
+func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, title string, originalFileName string, logger *logrus.Entry) (string, error) {
 	likelyLanguage := getLikelyLanguage()
 
 	templateMutex.RLock()
@@ -330,9 +363,11 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, log
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language": likelyLanguage,
-		"Content":  content,
-		"Today":    getTodayDate(), // must be in YYYY-MM-DD format
+		"Language":         likelyLanguage,
+		"Content":          content,
+		"Today":            getTodayDate(), // must be in YYYY-MM-DD format
+		"Title":            title,
+		"OriginalFileName": originalFileName,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(createdDateTemplate, templateData)
@@ -479,6 +514,7 @@ func (app *App) getSuggestedCustomFields(ctx context.Context, doc Document, sele
 
 	response := textsanitize.StripReasoning(completion.Choices[0].Content)
 	response = stripMarkdown(response)
+	response = normalizeLLMJSONWhitespace(response)
 	logger.Debugf("LLM response for custom fields: %s", response)
 
 	// Temporary struct to unmarshal LLM response with field name
@@ -635,7 +671,7 @@ func (app *App) generateSingleDocumentSuggestion(ctx context.Context, suggestion
 	var err error
 
 	if suggestionRequest.GenerateTitles {
-		suggestedTitle, err = app.getSuggestedTitle(ctx, content, suggestedTitle, docLogger)
+		suggestedTitle, err = app.getSuggestedTitle(ctx, documentID, content, suggestedTitle, docLogger)
 		if err != nil {
 			docLogger.Errorf("Error processing document %d: %v", documentID, err)
 			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)
@@ -671,7 +707,7 @@ func (app *App) generateSingleDocumentSuggestion(ctx context.Context, suggestion
 	}
 
 	if suggestionRequest.GenerateCreatedDate {
-		suggestedCreatedDate, err = app.getSuggestedCreatedDate(ctx, content, docLogger)
+		suggestedCreatedDate, err = app.getSuggestedCreatedDate(ctx, content, suggestedTitle, doc.OriginalFileName, docLogger)
 		if err != nil {
 			log.Errorf("Error generating createdDate for document %d: %v", documentID, err)
 			return DocumentSuggestion{}, fmt.Errorf("Document %d: %v", documentID, err)

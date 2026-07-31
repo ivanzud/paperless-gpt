@@ -184,7 +184,7 @@ func setupTestCase(tc interface{}, env *testEnv) {
 			},
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		assert.NoError(env.t, json.NewEncoder(w).Encode(response))
 	})
 
 	// Mock the GetDocumentsByTag response
@@ -215,25 +215,25 @@ func setupTestCase(tc interface{}, env *testEnv) {
 			}
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		assert.NoError(env.t, json.NewEncoder(w).Encode(response))
 	})
 
 	// Mock the correspondent creation endpoint
 	env.setMockResponse("/api/correspondents/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			assert.NoError(env.t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":   3,
 				"name": "test response",
-			})
+			}))
 		} else {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			assert.NoError(env.t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"results": []map[string]interface{}{
 					{"id": 1, "name": "Alpha"},
 					{"id": 2, "name": "Beta"},
 				},
-			})
+			}))
 		}
 	})
 }
@@ -272,7 +272,7 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 				OriginalFileName: "test.pdf",
 			}
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(response)
+			assert.NoError(t, json.NewEncoder(w).Encode(response))
 			return
 		}
 
@@ -284,12 +284,12 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":      1,
 				"title":   "Test Doc",
 				"content": "test ocr",
 				"tags":    updateReq["tags"],
-			})
+			}))
 			return
 		}
 	})
@@ -297,7 +297,8 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 	// Mock document download
 	env.setMockResponse("/api/documents/1/download/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("%PDF-1.4\n%test pdf content"))
+		_, err := w.Write([]byte("%PDF-1.4\n%test pdf content"))
+		assert.NoError(t, err)
 	})
 
 	// Create stub app without base App for background test
@@ -563,9 +564,7 @@ type recordingClient struct {
 }
 
 func (r *recordingClient) UpdateDocuments(ctx context.Context, documents []DocumentSuggestion, db *gorm.DB, isUndo bool) error {
-	for _, d := range documents {
-		r.calls = append(r.calls, d)
-	}
+	r.calls = append(r.calls, documents...)
 	if r.failAfterNCalls > 0 {
 		r.failAfterNCalls--
 		return r.updateErr
@@ -784,7 +783,12 @@ func TestProcessAutoOcrTagDocuments_FailTagAfterMaxRetries(t *testing.T) {
 		})
 
 		for round := 1; round <= 3; round++ {
-			app.processAutoOcrTagDocuments(context.Background())
+			_, err := app.processAutoOcrTagDocuments(context.Background())
+			if round < 3 {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 		}
 		require.Len(t, client.calls, 1, "a document that keeps timing out must be fail-tagged")
 		assert.Equal(t, []string{failTag}, client.calls[0].SuggestedTags)
@@ -812,7 +816,12 @@ func TestProcessAutoOcrTagDocuments_FailTagAfterMaxRetries(t *testing.T) {
 		})
 
 		for round := 1; round <= 3; round++ {
-			app.processAutoOcrTagDocuments(context.Background())
+			_, err := app.processAutoOcrTagDocuments(context.Background())
+			if round < 3 {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 		}
 
 		// The healthy document is updated every round and must never reset

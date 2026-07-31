@@ -1,4 +1,5 @@
-import { expect, Page, test } from '@playwright/test';
+import { expect, Locator, Page, test, TestInfo } from '@playwright/test';
+import { mkdir } from 'fs/promises';
 import path, { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { addTagToDocument, PORTS, setupTestEnvironment, TestEnvironment, uploadDocument } from './test-environment';
@@ -6,7 +7,36 @@ import { addTagToDocument, PORTS, setupTestEnvironment, TestEnvironment, uploadD
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 let testEnv: TestEnvironment;
-let page: Page;
+
+async function capture(page: Page, testInfo: TestInfo, name: string) {
+  const directory = path.resolve('test-results', 'screenshots', testInfo.project.name);
+  await mkdir(directory, { recursive: true });
+  await page.screenshot({
+    path: path.join(directory, `${name}.png`),
+    fullPage: true,
+  });
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  const dimensions = await page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+  }));
+  expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth + 1);
+}
+
+async function expectWithinViewport(page: Page, locator: Locator) {
+  await expect(locator).toBeVisible();
+  const [box, viewport] = await Promise.all([
+    locator.boundingBox(),
+    page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+  ]);
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height + 1);
+}
 
 test.beforeAll(async () => {
   testEnv = await setupTestEnvironment();
@@ -16,13 +46,13 @@ test.afterAll(async () => {
   await testEnv?.cleanup();
 });
 
-test.beforeEach(async ({ page: testPage }) => {
-  page = testPage;
+test.beforeEach(async ({ page }, testInfo) => {
   await page.goto(`http://localhost:${testEnv.paperlessGpt.getMappedPort(PORTS.paperlessGpt)}`);
-  await page.screenshot({ path: 'test-results/initial-state.png' });
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, 'initial-state');
 });
 
-test('should process document and show changes in history', async () => {
+test('should process document and show changes in history', async ({ page }, testInfo) => {
   const paperlessNgxPort = testEnv.paperlessNgx.getMappedPort(PORTS.paperlessNgx);
   const paperlessGptPort = testEnv.paperlessGpt.getMappedPort(PORTS.paperlessGpt);
   const credentials = { username: 'admin', password: 'admin' };
@@ -72,29 +102,39 @@ test('should process document and show changes in history', async () => {
   
   // Wait for document to appear in the list
   await page.waitForSelector('.document-card', { timeout: 1000 * 60 });
-  await page.screenshot({ path: 'test-results/document-loaded.png' });
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, 'document-loaded');
   
   // Click the process button (starts an async suggestion job with progress UI)
   await page.click('button:has-text("Generate suggestions")');
 
   // Wait for the job to finish and the review to appear
   await page.waitForSelector('.suggestions-review', { timeout: 60000 });
-  await page.screenshot({ path: 'test-results/suggestions-loaded.png' });
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, 'suggestions-loaded');
 
   // Apply all remaining suggestions via the summary dialog
   await page.click('button:has-text("Apply remaining")');
-  await page.getByRole('button', { name: /^Apply to \d+ documents?$/ }).click();
+  const dialog = page
+    .getByRole('heading', { name: /^Apply suggestions to \d+ documents?\?$/ })
+    .locator('..');
+  const confirmButton = page.getByRole('button', { name: /^Apply to \d+ documents?$/ });
+  await expectWithinViewport(page, dialog);
+  await expectWithinViewport(page, confirmButton);
+  await capture(page, testInfo, 'apply-confirmation');
+  await confirmButton.click();
 
   // Wait for the success toast (review closes automatically once all documents are decided)
   await page.waitForSelector('div[role="status"]:has-text("Applied")', { timeout: 15000 });
-  await page.screenshot({ path: 'test-results/suggestions-applied.png' });
+  await capture(page, testInfo, 'suggestions-applied');
 
   // 3. Check history page for the modifications
-  await page.click('a:has-text("History")');
+  await page.getByRole('link', { name: 'History', exact: true }).click();
   
   // Wait for history page to load
   await page.waitForSelector('.modification-history', { timeout: 5000 });
-  await page.screenshot({ path: 'test-results/history-page.png' });
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, 'history-page');
 
   // Verify at least one modification entry exists
   const modifications = await page.locator('.undo-card').count();

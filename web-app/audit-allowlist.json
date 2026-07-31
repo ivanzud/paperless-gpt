@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    {
+      "source": 1124282,
+      "package": "react-router",
+      "url": "https://github.com/advisories/GHSA-qwww-vcr4-c8h2",
+      "severity": "high",
+      "expires": "2026-10-31",
+      "rationale": "The advisory applies to React Server Components action handling. This application is a static Vite SPA and does not use React Router framework/server mode, RSC routes, or server actions. React Router has not published a fixed 7.x release; npm only proposes a breaking downgrade to 6.x."
+    }
+  ]
+}

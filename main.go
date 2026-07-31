@@ -106,7 +106,6 @@ var (
 	customFieldTemplate   *template.Template
 	summaryTemplate       *template.Template
 	ocrTemplate           *template.Template
-	adhocAnalysisTemplate *template.Template
 	templateMutex         sync.RWMutex
 
 	// Server-side settings
@@ -152,8 +151,6 @@ type App struct {
 	autoTagComplete    string            // Tag to add to documents after auto-processing is complete
 	ocrProviderLabel   string            // Human-readable provider description for run records ("llm (ollama/minicpm-v)")
 	ocrFailures        ocrFailureTracker // Per-document OCR failure counts for the auto-OCR poll
-	backgroundOCRMu    sync.Mutex
-	backgroundOCRFails map[int]int
 }
 
 func main() {
@@ -380,7 +377,6 @@ func main() {
 		pdfSkipExistingOCR: pdfSkipExistingOCR,
 		autoTagComplete:    autoTagComplete,
 		ocrProviderLabel:   ocrProviderLabel(),
-		backgroundOCRFails: make(map[int]int),
 	}
 
 	if app.isOcrEnabled() {
@@ -1028,8 +1024,7 @@ func loadTemplates() error {
 	if err != nil {
 		return err
 	}
-	adhocAnalysisTemplate, err = loadTemplate("adhoc-analysis_prompt.tmpl")
-	if err != nil {
+	if _, err = loadTemplate("adhoc-analysis_prompt.tmpl"); err != nil {
 		return err
 	}
 	return nil

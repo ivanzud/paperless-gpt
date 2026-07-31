@@ -6,7 +6,15 @@ baseline_file="scripts/ci/go-complexity-baseline.txt"
 output_file="$(mktemp)"
 trap 'rm -f "$output_file"' EXIT
 
-"$(go env GOPATH)/bin/gocyclo" -over "$threshold" . >"$output_file" || true
+mapfile -d '' go_files < <(
+  git ls-files -z --cached --others --exclude-standard -- '*.go'
+)
+if (( ${#go_files[@]} == 0 )); then
+  echo "No repository-owned Go files found."
+  exit 1
+fi
+
+"$(go env GOPATH)/bin/gocyclo" -over "$threshold" "${go_files[@]}" >"$output_file" || true
 
 declare -A baseline=()
 while IFS='|' read -r func_name file_path max_complexity; do

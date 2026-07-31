@@ -35,8 +35,14 @@ jobs:
         run: npm run lint
         working-directory: ./web-app
 
+      - name: Test frontend build contract
+        run: npm test
+        working-directory: ./web-app
+
       - name: Audit production frontend dependencies
-        run: npm audit --omit=dev --audit-level=high
+        # audit:ci permits only reviewed, unexpired advisories from
+        # audit-allowlist.json and always rejects unexpected highs or criticals.
+        run: npm run audit:ci
         working-directory: ./web-app
 
       - name: Upload frontend build artifact
