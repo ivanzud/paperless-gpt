@@ -40,6 +40,7 @@ jobs:
             lycheeverse/lychee:latest \
             --no-progress \
             --max-concurrency 4 \
+            --exclude '^https://api\.star-history\.com/' \
             README.md \
             CHANGELOG.md \
             web-app/README.md \
