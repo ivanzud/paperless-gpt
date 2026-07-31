@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +10,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRunHTTPServerReturnsUnexpectedListenError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	backgroundDone := make(chan struct{})
+	close(backgroundDone)
+	stopped := make(chan struct{})
+
+	err = runHTTPServer(
+		context.Background(),
+		func() { close(stopped) },
+		http.NotFoundHandler(),
+		listener.Addr().String(),
+		backgroundDone,
+	)
+
+	require.ErrorContains(t, err, "HTTP server failed")
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("expected server failure to stop the application context")
+	}
+}
 
 // TestDocument containing extra parameters for testing
 type TestDocument struct {

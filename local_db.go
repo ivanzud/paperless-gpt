@@ -21,6 +21,7 @@ type ModificationHistory struct {
 	ModField      string `gorm:"size:255;not null"`      // Field being modified
 	PreviousValue string `gorm:"size:1048576"`           // Previous value of the field
 	NewValue      string `gorm:"size:1048576"`           // New value of the field
+	RemoteID      *int   `gorm:"default:null"`           // Related Paperless object, e.g. a note created for a summary
 	Undone        bool   `gorm:"not null;default:false"` // Whether the modification has been undone
 	UndoneDate    string `gorm:"default:null"`           // Date and time of undoing the modification
 }

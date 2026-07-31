@@ -86,6 +86,17 @@ RUN CGO_ENABLED=1 GOMAXPROCS=$(nproc) go build -tags musl -o paperless-gpt .
 # Stage 3: Create a lightweight image with just the binary
 FROM docker.io/alpine:3.23.3
 
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
+
+LABEL org.opencontainers.image.title="paperless-gpt" \
+    org.opencontainers.image.description="AI-powered document metadata and OCR companion for paperless-ngx" \
+    org.opencontainers.image.source="https://github.com/ivanzud/paperless-gpt" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.revision="${COMMIT}" \
+    org.opencontainers.image.created="${BUILD_DATE}"
+
 ENV GIN_MODE=release
 
 # Install necessary runtime dependencies

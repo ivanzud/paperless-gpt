@@ -11,10 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// envReadPattern matches literal os.Getenv("X") / os.LookupEnv("X") calls.
-// Dynamically-composed keys (e.g. os.Getenv(prefix+"MAX_RETRIES")) can't be
-// caught this way; those are covered by the registry entries directly.
-var envReadPattern = regexp.MustCompile(`os\.(?:Getenv|LookupEnv)\("([A-Z0-9_]+)"\)`)
+// envReadPatterns cover direct environment reads and the typed helpers that
+// accept an environment key. Dynamically-composed keys (for example,
+// os.Getenv(prefix+"MAX_RETRIES")) remain registered explicitly.
+var envReadPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`os\.(?:Getenv|LookupEnv)\s*\(\s*"([A-Z0-9_]+)"\s*\)`),
+	regexp.MustCompile(`(?:parseOptionalBoolEnv|parseBoolEnv)\s*\(\s*"([A-Z0-9_]+)"\s*\)`),
+}
+
+func findLiteralEnvReads(source string) []string {
+	var reads []string
+	for _, pattern := range envReadPatterns {
+		for _, match := range pattern.FindAllStringSubmatch(source, -1) {
+			reads = append(reads, match[1])
+		}
+	}
+	return reads
+}
 
 // TestEnvRegistryCoversAllReads is the drift guard: every environment variable
 // the code reads with a literal key must be documented in envRegistry. Adding a
@@ -47,8 +60,8 @@ func TestEnvRegistryCoversAllReads(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			for _, m := range envReadPattern.FindAllStringSubmatch(string(data), -1) {
-				readInCode[m[1]] = append(readInCode[m[1]], path)
+			for _, name := range findLiteralEnvReads(string(data)) {
+				readInCode[name] = append(readInCode[name], path)
 			}
 			return nil
 		})
@@ -64,6 +77,22 @@ func TestEnvRegistryCoversAllReads(t *testing.T) {
 		}
 	}
 	assert.Empty(t, missing, "these env vars are read in code but missing from envRegistry — add them so the /config view documents them:\n%s", strings.Join(missing, "\n"))
+}
+
+func TestFindLiteralEnvReadsIncludesTypedHelpers(t *testing.T) {
+	source := `
+		os.Getenv("DIRECT_VALUE")
+		os.LookupEnv( "LOOKED_UP_VALUE" )
+		parseBoolEnv("BOOLEAN_VALUE")
+		parseOptionalBoolEnv("OPTIONAL_BOOLEAN_VALUE")
+	`
+
+	assert.ElementsMatch(t, []string{
+		"DIRECT_VALUE",
+		"LOOKED_UP_VALUE",
+		"BOOLEAN_VALUE",
+		"OPTIONAL_BOOLEAN_VALUE",
+	}, findLiteralEnvReads(source))
 }
 
 // TestEnvRegistryWellFormed checks the registry's own invariants.

@@ -10,6 +10,7 @@ export interface GenerationFlags {
   documentTypes: boolean;
   createdDate: boolean;
   customFields: boolean;
+  summary: boolean;
 }
 
 const fieldChips: { key: keyof GenerationFlags; label: string }[] = [
@@ -19,6 +20,7 @@ const fieldChips: { key: keyof GenerationFlags; label: string }[] = [
   { key: "documentTypes", label: "Document type" },
   { key: "createdDate", label: "Created date" },
   { key: "customFields", label: "Custom fields" },
+  { key: "summary", label: "Summary" },
 ];
 
 interface GenerationOptionsProps {

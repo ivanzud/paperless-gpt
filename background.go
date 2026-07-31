@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,9 +85,25 @@ func withBackgroundDocumentTimeout(parent context.Context) (context.Context, con
 	return context.WithTimeout(parent, timeout)
 }
 
-// Start our background tasks in a goroutine
-func StartBackgroundTasks(ctx context.Context, app BackgroundProcessor) {
+func waitForBackgroundDelay(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// StartBackgroundTasks starts the background worker and returns a channel that
+// closes only after the worker has observed cancellation and exited.
+func StartBackgroundTasks(ctx context.Context, app BackgroundProcessor) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
+
 		minBackoffDuration := 10 * time.Second
 		maxBackoffDuration := time.Hour
 		pollingInterval := 10 * time.Second
@@ -127,7 +142,10 @@ func StartBackgroundTasks(ctx context.Context, app BackgroundProcessor) {
 
 			if err != nil {
 				log.Errorf("Error in background tagging: %v", err)
-				time.Sleep(backoffDuration)
+				if !waitForBackgroundDelay(ctx, backoffDuration) {
+					log.Infoln("Background tasks shutting down")
+					return
+				}
 
 				// Exponential backoff logic
 				backoffDuration *= 2
@@ -142,10 +160,14 @@ func StartBackgroundTasks(ctx context.Context, app BackgroundProcessor) {
 
 			// If nothing was processed, pause before next cycle
 			if processedCount == 0 {
-				time.Sleep(pollingInterval)
+				if !waitForBackgroundDelay(ctx, pollingInterval) {
+					log.Infoln("Background tasks shutting down")
+					return
+				}
 			}
 		}
 	}()
+	return done
 }
 
 // applyFailTagAfterPartialSuccess applies the fail tag to a document whose
@@ -173,7 +195,7 @@ func applyFailTagAfterPartialSuccess(ctx context.Context, client ClientInterface
 		docLogger.Errorf("Document %d update succeeded after dropping fields %v, but fetching current state to apply fail tag failed: %v", documentID, droppedFields, err)
 		return
 	}
-	if slices.Contains(currentDoc.Tags, failTag) {
+	if containsTagCaseInsensitive(currentDoc.Tags, failTag) {
 		docLogger.Warnf("Document %d update succeeded after dropping fields %v; fail tag %q is already present.", documentID, droppedFields, failTag)
 		return
 	}
@@ -295,7 +317,7 @@ func (app *App) processAutoTagDocuments(ctx context.Context) (int, error) {
 		}
 
 		// Skip documents that have the autoOcrTag
-		if slices.Contains(document.Tags, autoOcrTag) {
+		if containsTagCaseInsensitive(document.Tags, autoOcrTag) {
 			cancel()
 			log.Debugf("Skipping document %d as it has the OCR tag %s", document.ID, autoOcrTag)
 			continue
@@ -386,15 +408,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 		// Skip OCR if the document already has the OCR complete tag and tagging is enabled
 		if app.pdfOCRTagging {
-			hasCompleteTag := false
-			for _, tag := range document.Tags {
-				if tag == app.pdfOCRCompleteTag {
-					hasCompleteTag = true
-					break
-				}
-			}
-
-			if hasCompleteTag {
+			if containsTagCaseInsensitive(document.Tags, app.pdfOCRCompleteTag) {
 				docLogger.Infof("Document already has OCR complete tag '%s', skipping OCR processing", app.pdfOCRCompleteTag)
 
 				// Remove only the autoOcrTag to take it out of the processing queue
@@ -573,19 +587,19 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 					documentSuggestion.CustomFieldsEnable = classifySuggestion.CustomFieldsEnable
 
 					for _, tag := range classifySuggestion.SuggestedTags {
-						if !slices.Contains(documentSuggestion.SuggestedTags, tag) {
+						if !containsTagCaseInsensitive(documentSuggestion.SuggestedTags, tag) {
 							documentSuggestion.SuggestedTags = append(documentSuggestion.SuggestedTags, tag)
 						}
 					}
 					documentSuggestion.KeepOriginalTags = true
 
 					for _, tag := range append(classifySuggestion.RemoveTags, autoTag) {
-						if !slices.Contains(documentSuggestion.RemoveTags, tag) {
+						if !containsTagCaseInsensitive(documentSuggestion.RemoveTags, tag) {
 							documentSuggestion.RemoveTags = append(documentSuggestion.RemoveTags, tag)
 						}
 					}
 					for _, tag := range classifySuggestion.AddTags {
-						if !slices.Contains(documentSuggestion.AddTags, tag) {
+						if !containsTagCaseInsensitive(documentSuggestion.AddTags, tag) {
 							documentSuggestion.AddTags = append(documentSuggestion.AddTags, tag)
 						}
 					}

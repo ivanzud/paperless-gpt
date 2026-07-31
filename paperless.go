@@ -680,14 +680,15 @@ func (client *PaperlessClient) GetDocumentsByTag(ctx context.Context, tag string
 		}
 
 		documents = append(documents, Document{
-			ID:            result.ID,
-			Title:         result.Title,
-			Content:       result.Content,
-			Correspondent: correspondentName,
-			Tags:          tagNames,
-			Owner:         result.Owner,
-			Permissions:   result.Permissions,
-			CreatedDate:   result.CreatedDate,
+			ID:               result.ID,
+			Title:            result.Title,
+			Content:          result.Content,
+			Correspondent:    correspondentName,
+			Tags:             tagNames,
+			Owner:            result.Owner,
+			Permissions:      result.Permissions,
+			CreatedDate:      result.CreatedDate,
+			OriginalFileName: result.OriginalFileName,
 		})
 	}
 
@@ -702,11 +703,11 @@ func (client *PaperlessClient) GetSimilarDocuments(ctx context.Context, document
 	}
 
 	var excludedTagIDs []string
-	for _, tagName := range []string{manualTag, autoTag, autoOcrTag, pdfOCRCompleteTag} {
+	for _, tagName := range protectedWorkflowTags() {
 		if tagName == "" {
 			continue
 		}
-		if tagID, exists := availableTags[tagName]; exists {
+		if _, tagID, exists := findTagIDCaseInsensitive(availableTags, tagName); exists {
 			excludedTagIDs = append(excludedTagIDs, strconv.Itoa(tagID))
 		}
 	}
@@ -735,10 +736,11 @@ func (client *PaperlessClient) GetSimilarDocuments(ctx context.Context, document
 	documents := make([]Document, 0, len(response.Results))
 	for _, result := range response.Results {
 		documents = append(documents, Document{
-			ID:          result.ID,
-			Title:       result.Title,
-			Content:     result.Content,
-			CreatedDate: result.CreatedDate,
+			ID:               result.ID,
+			Title:            result.Title,
+			Content:          result.Content,
+			CreatedDate:      result.CreatedDate,
+			OriginalFileName: result.OriginalFileName,
 		})
 	}
 
@@ -928,16 +930,16 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		updatedFields := make(map[string]interface{})
 		originalFields := make(map[string]interface{})
 		var partialDroppedFields []string
-
 		// --- TAGS ---
-		finalTagNames := originalDoc.Tags
+		finalTagNames := append([]string(nil), originalDoc.Tags...)
 		if len(document.SuggestedTags) > 0 {
 			if document.KeepOriginalTags {
 				finalTagNames = append(finalTagNames, document.SuggestedTags...)
 			} else {
-				finalTagNames = document.SuggestedTags
+				finalTagNames = append([]string(nil), document.SuggestedTags...)
 			}
 		}
+		finalTagNames = append(finalTagNames, document.AddTags...)
 		var cleanedTags []string
 		for _, tagName := range finalTagNames {
 			isRemoved := false
@@ -953,47 +955,43 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 		finalTagNames = cleanedTags
 
-		slices.Sort(finalTagNames)
-		finalTagNames = slices.Compact(finalTagNames)
+		finalTagNames = compactTagNamesCaseInsensitive(finalTagNames)
+		var appliedTagNames []string
 
 		log.Debugf("Document %d: Final tag names after compacting: %v", documentID, finalTagNames)
 
 		if !hasSameTags(originalDoc.Tags, finalTagNames) {
 			var finalTagIDs []int
 			for _, tagName := range finalTagNames {
-				if tagID, exists := availableTags[tagName]; exists {
+				if availableTagName, tagID, exists := findTagIDCaseInsensitive(availableTags, tagName); exists {
 					finalTagIDs = append(finalTagIDs, tagID)
+					appliedTagNames = append(appliedTagNames, availableTagName)
 					continue
 				}
 
-				if tagsAutoCreateEnabled() {
-					objPerms := client.getPermissionsOrWarn(ctx, &originalDoc, "Document %d: Failed to get permissions for new tag %q", documentID, tagName)
-					newTagID, err := client.CreateTag(ctx, tagName, objPerms)
-					if err != nil {
-						log.Warnf("Document %d: Failed to create new tag %q: %v", documentID, tagName, err)
-					} else {
-						log.Infof("Document %d: Created new tag %q with ID %d", documentID, tagName, newTagID)
-						availableTags[tagName] = newTagID
-						finalTagIDs = append(finalTagIDs, newTagID)
-						continue
-					}
-				}
-
-				isSystemTag := tagName == manualTag || tagName == autoTag || tagName == autoOcrTag || tagName == pdfOCRCompleteTag
-				if !isSystemTag {
+				canonicalSystemTag, isSystemTag := canonicalProtectedWorkflowTag(tagName)
+				if !isSystemTag && !tagsAutoCreateEnabled() {
 					log.Debugf("Document %d: skipping unknown non-system tag %q", documentID, tagName)
 					continue
 				}
+				if isSystemTag {
+					tagName = canonicalSystemTag
+				}
 
-				objPerms := client.getPermissionsOrWarn(ctx, &originalDoc, "Document %d: Failed to get permissions for system tag %q", documentID, tagName)
+				objPerms := client.getPermissionsOrWarn(ctx, &originalDoc, "Document %d: Failed to get permissions for new tag %q", documentID, tagName)
 				tagID, err := client.CreateTag(ctx, tagName, objPerms)
 				if err != nil {
-					return fmt.Errorf("error creating missing system tag %q for document %d: %w", tagName, documentID, err)
+					if isSystemTag {
+						return fmt.Errorf("error creating missing system tag %q for document %d: %w", tagName, documentID, err)
+					}
+					log.Warnf("Document %d: Failed to create new tag %q: %v", documentID, tagName, err)
+					continue
 				}
 
 				availableTags[tagName] = tagID
 				finalTagIDs = append(finalTagIDs, tagID)
-				log.Infof("Document %d: created missing system tag %q with ID %d", documentID, tagName, tagID)
+				appliedTagNames = append(appliedTagNames, tagName)
+				log.Infof("Document %d: created new tag %q with ID %d", documentID, tagName, tagID)
 			}
 			// Only update tags if there are remaining tags after changes
 			// Sending an empty tags array causes Paperless-NGX to return an error
@@ -1112,11 +1110,13 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		if len(updatedFields) == 0 {
 			log.Infof("No fields to update for document %d.", documentID)
 			// Still need to remove the auto-tag if it exists
-			if slices.Contains(originalDoc.Tags, autoTag) || slices.Contains(originalDoc.Tags, manualTag) || slices.Contains(originalDoc.Tags, autoOcrTag) {
+			if containsTagCaseInsensitive(originalDoc.Tags, autoTag) ||
+				containsTagCaseInsensitive(originalDoc.Tags, manualTag) ||
+				containsTagCaseInsensitive(originalDoc.Tags, autoOcrTag) {
 				var finalTagIDs []int
 				for _, tagName := range originalDoc.Tags {
 					if !strings.EqualFold(tagName, autoTag) && !strings.EqualFold(tagName, manualTag) && !strings.EqualFold(tagName, autoOcrTag) {
-						if tagID, exists := availableTags[tagName]; exists {
+						if _, tagID, exists := findTagIDCaseInsensitive(availableTags, tagName); exists {
 							finalTagIDs = append(finalTagIDs, tagID)
 						}
 					}
@@ -1133,6 +1133,17 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					updatedFields["tags"] = []int{}
 				}
 			} else {
+				if err := client.addSummaryAfterSkippedMetadata(
+					ctx,
+					documentID,
+					document.SuggestedSummary,
+					db,
+					isUndo,
+					&firstPartial,
+					partialDroppedFields,
+				); err != nil {
+					return fmt.Errorf("error adding summary note for document %d: %w", documentID, err)
+				}
 				continue
 			}
 		}
@@ -1145,16 +1156,22 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			return err
 		}
 		if patchSkipped {
+			if err := client.addSummaryAfterSkippedMetadata(
+				ctx,
+				documentID,
+				document.SuggestedSummary,
+				db,
+				isUndo,
+				&firstPartial,
+				partialDroppedFields,
+			); err != nil {
+				return fmt.Errorf("error adding summary note for document %d: %w", documentID, err)
+			}
 			continue
 		}
 		if len(partialDroppedFields) > 0 {
 			log.Warnf("Document %d updated partially after dropping invalid fields: %v", documentID, partialDroppedFields)
-			if firstPartial == nil {
-				firstPartial = &PartialUpdateError{
-					DocumentID:    documentID,
-					DroppedFields: append([]string(nil), partialDroppedFields...),
-				}
-			}
+			setPartialUpdate(&firstPartial, documentID, partialDroppedFields)
 		}
 
 		// Check if we need to remove auto/manual tags in a separate update
@@ -1175,7 +1192,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					var remainingTagNames []string
 					for _, tagName := range currentDoc.Tags {
 						if !strings.EqualFold(tagName, autoTag) && !strings.EqualFold(tagName, manualTag) && !strings.EqualFold(tagName, autoOcrTag) {
-							if tagID, exists := availableTags[tagName]; exists {
+							if _, tagID, exists := findTagIDCaseInsensitive(availableTags, tagName); exists {
 								remainingTagIDs = append(remainingTagIDs, tagID)
 								remainingTagNames = append(remainingTagNames, tagName)
 							}
@@ -1203,8 +1220,8 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 								mod := ModificationHistory{
 									DocumentID:    documentID,
 									ModField:      "tags",
-									PreviousValue: fmt.Sprintf("%v", originalDoc.Tags),
-									NewValue:      fmt.Sprintf("%v", remainingTagNames),
+									PreviousValue: encodeTagHistory(originalDoc.Tags),
+									NewValue:      encodeTagHistory(remainingTagNames),
 								}
 								if err := InsertModification(db, &mod); err != nil {
 									log.Warnf("Error inserting tag modification record: %v", err)
@@ -1231,21 +1248,139 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			} else {
 				log.Printf("Document %d: Updated %s from %v to %v", documentID, field, value, updatedFields[field])
 			}
+			previousValue, newValue := modificationHistoryValues(
+				field,
+				value,
+				updatedFields[field],
+				appliedTagNames,
+			)
 			mod := ModificationHistory{
 				DocumentID:    documentID,
 				ModField:      field,
-				PreviousValue: fmt.Sprintf("%v", value),
-				NewValue:      fmt.Sprintf("%v", updatedFields[field]),
+				PreviousValue: previousValue,
+				NewValue:      newValue,
 			}
 			if err := InsertModification(db, &mod); err != nil {
 				return fmt.Errorf("error inserting modification record for document %d: %w", documentID, err)
 			}
 		}
+		client.addSummaryAfterMetadata(ctx, documentID, document.SuggestedSummary, db, isUndo, &firstPartial)
 		log.Printf("Document %d updated successfully.", documentID)
 	}
 	if firstPartial != nil {
 		return firstPartial
 	}
+	return nil
+}
+
+func encodeTagHistory(tags []string) string {
+	if tags == nil {
+		tags = []string{}
+	}
+	encoded, _ := json.Marshal(tags)
+	return string(encoded)
+}
+
+func modificationHistoryValues(
+	field string,
+	previousValue interface{},
+	newValue interface{},
+	appliedTagNames []string,
+) (string, string) {
+	if field == "tags" {
+		previousTags, _ := previousValue.([]string)
+		return encodeTagHistory(previousTags), encodeTagHistory(appliedTagNames)
+	}
+	return fmt.Sprintf("%v", previousValue), fmt.Sprintf("%v", newValue)
+}
+
+func setPartialUpdate(firstPartial **PartialUpdateError, documentID int, droppedFields []string) {
+	if len(droppedFields) == 0 {
+		return
+	}
+
+	if *firstPartial == nil {
+		*firstPartial = &PartialUpdateError{DocumentID: documentID}
+	}
+	if (*firstPartial).DocumentID != documentID {
+		return
+	}
+
+	for _, field := range droppedFields {
+		if !slices.Contains((*firstPartial).DroppedFields, field) {
+			(*firstPartial).DroppedFields = append((*firstPartial).DroppedFields, field)
+		}
+	}
+}
+
+func (client *PaperlessClient) addSummaryAfterSkippedMetadata(
+	ctx context.Context,
+	documentID int,
+	summary string,
+	db *gorm.DB,
+	isUndo bool,
+	firstPartial **PartialUpdateError,
+	droppedFields []string,
+) error {
+	if isUndo || summary == "" {
+		setPartialUpdate(firstPartial, documentID, droppedFields)
+		return nil
+	}
+	if err := client.addSummaryNoteAndHistory(ctx, documentID, summary, db); err != nil {
+		return err
+	}
+
+	setPartialUpdate(firstPartial, documentID, droppedFields)
+	log.Printf("Document %d summary note added successfully.", documentID)
+	return nil
+}
+
+func (client *PaperlessClient) addSummaryAfterMetadata(
+	ctx context.Context,
+	documentID int,
+	summary string,
+	db *gorm.DB,
+	isUndo bool,
+	firstPartial **PartialUpdateError,
+) {
+	if isUndo || summary == "" {
+		return
+	}
+	if err := client.addSummaryNoteAndHistory(ctx, documentID, summary, db); err != nil {
+		log.Warnf("Document %d metadata updated, but adding the summary note failed: %v", documentID, err)
+		setPartialUpdate(firstPartial, documentID, []string{"summary"})
+		return
+	}
+
+	log.Printf("Document %d summary note added successfully.", documentID)
+}
+
+func (client *PaperlessClient) addSummaryNoteAndHistory(ctx context.Context, documentID int, summary string, db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("modification history database is required")
+	}
+
+	createdNote, err := client.CreateDocumentNote(ctx, documentID, summary)
+	if err != nil {
+		return err
+	}
+
+	modification := ModificationHistory{
+		DocumentID:    documentID,
+		ModField:      "summary",
+		PreviousValue: "",
+		NewValue:      summary,
+		RemoteID:      &createdNote.ID,
+	}
+	if err := InsertModification(db, &modification); err != nil {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if rollbackErr := client.DeleteDocumentNote(rollbackCtx, documentID, createdNote.ID); rollbackErr != nil {
+			return fmt.Errorf("persisting summary history failed: %w; deleting note %d also failed: %v", err, createdNote.ID, rollbackErr)
+		}
+		return fmt.Errorf("persisting summary history failed and note %d was deleted: %w", createdNote.ID, err)
+	}
+
 	return nil
 }
 
@@ -1823,6 +1958,97 @@ func (client *PaperlessClient) DeleteDocument(ctx context.Context, documentID in
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("error deleting document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}
+
+func parseCreatedDocumentNote(body []byte, expectedNote string) (DocumentNote, error) {
+	var candidates []DocumentNote
+	if err := json.Unmarshal(body, &candidates); err != nil {
+		var envelope struct {
+			Notes   []DocumentNote `json:"notes"`
+			Results []DocumentNote `json:"results"`
+		}
+		if envelopeErr := json.Unmarshal(body, &envelope); envelopeErr == nil {
+			candidates = append(envelope.Notes, envelope.Results...)
+		}
+
+		if len(candidates) == 0 {
+			var single DocumentNote
+			if singleErr := json.Unmarshal(body, &single); singleErr == nil {
+				candidates = append(candidates, single)
+			}
+		}
+	}
+
+	var created DocumentNote
+	for _, candidate := range candidates {
+		if candidate.ID > created.ID && candidate.Note == expectedNote {
+			created = candidate
+		}
+	}
+	if created.ID <= 0 {
+		return DocumentNote{}, fmt.Errorf("created note was not present in the Paperless response")
+	}
+
+	return created, nil
+}
+
+// CreateDocumentNote adds a note through Paperless' dedicated notes endpoint.
+func (client *PaperlessClient) CreateDocumentNote(ctx context.Context, documentID int, note string) (DocumentNote, error) {
+	if documentID <= 0 {
+		return DocumentNote{}, fmt.Errorf("invalid document ID %d", documentID)
+	}
+
+	requestBody, err := json.Marshal(struct {
+		Note string `json:"note"`
+	}{Note: note})
+	if err != nil {
+		return DocumentNote{}, fmt.Errorf("error marshaling document note request: %w", err)
+	}
+
+	path := fmt.Sprintf("api/documents/%d/notes/", documentID)
+	resp, err := client.Do(ctx, http.MethodPost, path, bytes.NewReader(requestBody))
+	if err != nil {
+		return DocumentNote{}, fmt.Errorf("error creating note for document %d: %w", documentID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return DocumentNote{}, fmt.Errorf("error creating note for document %d: status %d", documentID, resp.StatusCode)
+	}
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return DocumentNote{}, fmt.Errorf("error reading created note response for document %d: %w", documentID, err)
+	}
+	createdNote, err := parseCreatedDocumentNote(responseBody, note)
+	if err != nil {
+		return DocumentNote{}, fmt.Errorf("error parsing created note response for document %d: %w", documentID, err)
+	}
+
+	return createdNote, nil
+}
+
+// DeleteDocumentNote removes one specific note created by paperless-gpt.
+func (client *PaperlessClient) DeleteDocumentNote(ctx context.Context, documentID int, noteID int) error {
+	if documentID <= 0 {
+		return fmt.Errorf("invalid document ID %d", documentID)
+	}
+	if noteID <= 0 {
+		return fmt.Errorf("invalid note ID %d", noteID)
+	}
+
+	path := fmt.Sprintf("api/documents/%d/notes/?id=%d", documentID, noteID)
+	resp, err := client.Do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("error deleting note %d from document %d: %w", noteID, documentID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("error deleting note %d from document %d: status %d", noteID, documentID, resp.StatusCode)
 	}
 
 	return nil

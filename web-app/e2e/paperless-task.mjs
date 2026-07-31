@@ -33,6 +33,7 @@ export function inspectPaperlessTaskPayload(payload) {
     asDocumentId(task.result_data?.document_id) ??
     asDocumentId(resultDocumentId) ??
     asDocumentId(task.document_id) ??
+    asDocumentId(task.related_document) ??
     asDocumentId(task.related_document_ids?.[0]) ??
     (isLegacyResponse ? asDocumentId(task.id) : undefined);
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"text/template"
 
@@ -375,7 +376,7 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 
 func TestGetSuggestedTagsFiltersProcessingTags(t *testing.T) {
 	previousTemplate := tagTemplate
-	tagTemplate = template.Must(template.New("tag").Parse(testTagTemplate))
+	tagTemplate = template.Must(template.New("tag").Parse(testTagTemplate + "\nOriginal: {{.OriginalTags}}\n"))
 	t.Cleanup(func() {
 		tagTemplate = previousTemplate
 	})
@@ -384,17 +385,23 @@ func TestGetSuggestedTagsFiltersProcessingTags(t *testing.T) {
 	originalAutoTag := autoTag
 	originalAutoOCRTag := autoOcrTag
 	originalPDFOCRCompleteTag := pdfOCRCompleteTag
+	originalFailTag := failTag
+	originalAutoTagComplete := autoTagComplete
 	t.Cleanup(func() {
 		manualTag = originalManualTag
 		autoTag = originalAutoTag
 		autoOcrTag = originalAutoOCRTag
 		pdfOCRCompleteTag = originalPDFOCRCompleteTag
+		failTag = originalFailTag
+		autoTagComplete = originalAutoTagComplete
 	})
 
 	manualTag = "paperless-gpt"
 	autoTag = "paperless-gpt-auto"
 	autoOcrTag = "paperless-gpt-ocr-auto"
 	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+	failTag = "paperless-gpt-failed"
+	autoTagComplete = "paperless-gpt-auto-complete"
 
 	originalCreateNewTags := createNewTags
 	settingsMutex.RLock()
@@ -406,33 +413,107 @@ func TestGetSuggestedTagsFiltersProcessingTags(t *testing.T) {
 		settings = originalSettings
 		settingsMutex.Unlock()
 	})
-	createNewTags = false
-	settingsMutex.Lock()
-	settings.TagsAutoCreate = false
-	settingsMutex.Unlock()
-
-	mockLLM := &mockLLM{Response: "finance, paperless-gpt-ocr-complete"}
-	app := &App{LLM: mockLLM}
 	availableTags := []string{
-		manualTag,
+		strings.ToUpper(manualTag),
 		autoTag,
-		autoOcrTag,
+		strings.ToUpper(autoOcrTag),
 		pdfOCRCompleteTag,
+		strings.ToUpper(failTag),
+		autoTagComplete,
 		"finance",
+		"archive",
+	}
+	originalTags := []string{
+		"ARCHIVE",
+		strings.ToUpper(manualTag),
+		strings.ToUpper(autoTag),
+		strings.ToUpper(autoOcrTag),
+		strings.ToUpper(pdfOCRCompleteTag),
+		strings.ToUpper(failTag),
+		strings.ToUpper(autoTagComplete),
 	}
 
-	tags, err := app.getSuggestedTags(
-		context.Background(),
-		"sample content",
-		"Test Title",
-		availableTags,
-		nil,
-		logrus.WithField("test", "filter-processing-tags"),
-	)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"finance"}, tags)
-	assert.Contains(t, mockLLM.lastPrompt, "Tags: [finance]")
-	assert.NotContains(t, mockLLM.lastPrompt, pdfOCRCompleteTag)
+	for _, testCase := range []struct {
+		name         string
+		allowNewTags bool
+		expected     []string
+	}{
+		{name: "existing tags only", expected: []string{"archive", "finance"}},
+		{name: "new tags allowed", allowNewTags: true, expected: []string{"archive", "finance", "new-tag"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			createNewTags = testCase.allowNewTags
+			settingsMutex.Lock()
+			settings.TagsAutoCreate = false
+			settingsMutex.Unlock()
+
+			mockLLM := &mockLLM{Response: strings.Join([]string{
+				"finance",
+				"new-tag",
+				strings.ToUpper(manualTag),
+				strings.ToUpper(autoTag),
+				strings.ToUpper(autoOcrTag),
+				strings.ToUpper(pdfOCRCompleteTag),
+				strings.ToUpper(failTag),
+				strings.ToUpper(autoTagComplete),
+			}, ", ")}
+			app := &App{LLM: mockLLM}
+			tags, err := app.getSuggestedTags(
+				context.Background(),
+				"sample content",
+				"Test Title",
+				availableTags,
+				originalTags,
+				logrus.WithField("test", "filter-processing-tags"),
+			)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, testCase.expected, tags)
+
+			lowerPrompt := strings.ToLower(mockLLM.lastPrompt)
+			for _, protectedTag := range protectedWorkflowTags() {
+				assert.NotContains(t, lowerPrompt, strings.ToLower(protectedTag))
+			}
+			assert.Contains(t, lowerPrompt, "tags: [finance archive]")
+			assert.Contains(t, lowerPrompt, "original: [archive]")
+		})
+	}
+}
+
+func TestGenerateSingleDocumentSuggestionAutoTagComplete(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		autoTagComplete  string
+		isAutoProcessing bool
+		expectedAddTags  []string
+	}{
+		{
+			name:             "enabled for auto processing",
+			autoTagComplete:  "paperless-gpt-auto-complete",
+			isAutoProcessing: true,
+			expectedAddTags:  []string{"paperless-gpt-auto-complete"},
+		},
+		{
+			name:             "disabled when empty",
+			isAutoProcessing: true,
+		},
+		{
+			name:            "not added during manual review",
+			autoTagComplete: "paperless-gpt-auto-complete",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			app := &App{autoTagComplete: testCase.autoTagComplete}
+			suggestion, err := app.generateSingleDocumentSuggestion(
+				context.Background(),
+				GenerateSuggestionsRequest{IsAutoProcessing: testCase.isAutoProcessing},
+				Document{ID: 42, Title: "Invoice"},
+				suggestionGenerationContext{},
+				logrus.WithField("test", "auto-tag-complete"),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, testCase.expectedAddTags, suggestion.AddTags)
+		})
+	}
 }
 
 func TestTokenLimitInTitleGeneration(t *testing.T) {
@@ -653,6 +734,12 @@ func (m *mockPaperlessClient) GetAllDocumentTypes(ctx context.Context) ([]Docume
 }
 func (m *mockPaperlessClient) CreateTag(ctx context.Context, tagName string, objPerms *ObjPermissions) (int, error) {
 	return 0, nil
+}
+func (m *mockPaperlessClient) CreateDocumentNote(ctx context.Context, documentID int, note string) (DocumentNote, error) {
+	return DocumentNote{}, nil
+}
+func (m *mockPaperlessClient) DeleteDocumentNote(ctx context.Context, documentID int, noteID int) error {
+	return nil
 }
 func (m *mockPaperlessClient) DownloadDocumentAsImages(ctx context.Context, documentID int, pageLimit int) ([]string, int, error) {
 	return nil, 0, nil

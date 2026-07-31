@@ -24,8 +24,9 @@ anyone who can reach the UI.
 1. **`envRegistry` (env_registry.go) is the structured source of truth** for
    the config view: each entry has name, category, default, `secret` flag and
    description. A **drift test** walks the Go source and fails the build if any
-   literal `os.Getenv`/`os.LookupEnv` key is missing from the registry, so the
-   registry can never silently fall behind the code.
+   literal `os.Getenv`/`os.LookupEnv` key, or a literal key passed through a
+   typed environment helper, is missing from the registry, so the registry
+   can never silently fall behind the code.
 
 2. **`GET /api/config` is read-only and never exposes secret values.** Secret
    entries report only `is_set`; URL values have embedded `user:pass@`
@@ -38,7 +39,8 @@ anyone who can reach the UI.
 
 ## Consequences
 
-- Adding an `os.Getenv("NEW_VAR")` now requires a registry entry or the test
+- Adding an `os.Getenv("NEW_VAR")` or typed helper read such as
+  `parseOptionalBoolEnv("NEW_VAR")` now requires a registry entry or the test
   fails — documentation of new settings is enforced, not hoped for.
 - Two sources of truth still exist: the registry (code + UI) and the README
   table (humans browsing GitHub). **Follow-up (deferred):** generate the README

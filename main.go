@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"paperless-gpt/ocr"
 	"paperless-gpt/sanitize"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -154,9 +157,8 @@ type App struct {
 }
 
 func main() {
-	// Context for proper control of background-thread
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Validate Environment Variables
 	validateOrDefaultEnvVars()
@@ -410,7 +412,7 @@ func main() {
 	}
 
 	// Start Background-Tasks for Auto-Tagging and Auto-OCR (if enabled)
-	StartBackgroundTasks(ctx, app)
+	backgroundDone := StartBackgroundTasks(ctx, app)
 
 	// Create a Gin router with default middleware (logger and recovery)
 	router := gin.Default()
@@ -548,13 +550,58 @@ func main() {
 	startWorkerPool(app, numWorkers)
 	startSuggestionWorkerPool(app, suggestionWorkerCount())
 
-	if listenInterface == "" {
-		listenInterface = ":8080"
+	if err := runHTTPServer(ctx, stop, router, listenInterface, backgroundDone); err != nil {
+		log.Fatalf("%v", err)
 	}
-	log.Infoln("Server started on interface", listenInterface)
-	if err := router.Run(listenInterface); err != nil {
-		log.Fatalf("Failed to run server: %v", err)
+}
+
+func runHTTPServer(
+	ctx context.Context,
+	stop func(),
+	handler http.Handler,
+	addr string,
+	backgroundDone <-chan struct{},
+) error {
+	if addr == "" {
+		addr = ":8080"
 	}
+	log.Infoln("Server started on interface", addr)
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+
+	var unexpectedServerErr error
+	select {
+	case <-ctx.Done():
+		log.Infoln("Shutdown signal received")
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Errorf("Graceful HTTP shutdown failed: %v", err)
+			_ = server.Close()
+		}
+		cancelShutdown()
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			unexpectedServerErr = fmt.Errorf("HTTP server failed: %w", err)
+		}
+		stop()
+	}
+
+	select {
+	case <-backgroundDone:
+		log.Infoln("Background tasks stopped")
+	case <-time.After(30 * time.Second):
+		log.Warn("Timed out waiting for background tasks to stop")
+	}
+
+	return unexpectedServerErr
 }
 
 func printVersion() {
@@ -918,17 +965,6 @@ func validateOrDefaultEnvVars() {
 // documentLogger creates a logger with document context
 func documentLogger(documentID int) *logrus.Entry {
 	return log.WithField("document_id", documentID)
-}
-
-// removeTagFromList removes a specific tag from a list of tags
-func removeTagFromList(tags []string, tagToRemove string) []string {
-	filteredTags := []string{}
-	for _, tag := range tags {
-		if tag != tagToRemove {
-			filteredTags = append(filteredTags, tag)
-		}
-	}
-	return filteredTags
 }
 
 // getLikelyLanguage determines the likely language of the document content

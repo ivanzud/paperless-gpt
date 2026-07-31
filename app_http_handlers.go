@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -320,6 +321,12 @@ func suggestionJobResponse(job SuggestionJob) gin.H {
 	return response
 }
 
+type documentUpdateOutcome struct {
+	DocumentID    int      `json:"document_id"`
+	Status        string   `json:"status"`
+	DroppedFields []string `json:"dropped_fields,omitempty"`
+}
+
 // updateDocumentsHandler handles the PATCH /api/update-documents endpoint
 func (app *App) updateDocumentsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -330,14 +337,60 @@ func (app *App) updateDocumentsHandler(c *gin.Context) {
 		return
 	}
 
-	err := app.Client.UpdateDocuments(ctx, documents, app.Database, false)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error updating documents: %v", err)})
-		log.Errorf("Error updating documents: %v", err)
-		return
+	outcomes := make([]documentUpdateOutcome, 0, len(documents))
+	appliedCount := 0
+	failedCount := 0
+	for _, document := range documents {
+		err := app.Client.UpdateDocuments(ctx, []DocumentSuggestion{document}, app.Database, false)
+		if err == nil {
+			appliedCount++
+			outcomes = append(outcomes, documentUpdateOutcome{
+				DocumentID: document.ID,
+				Status:     "applied",
+			})
+			continue
+		}
+
+		var partial *PartialUpdateError
+		if errors.As(err, &partial) {
+			appliedCount++
+			outcomes = append(outcomes, documentUpdateOutcome{
+				DocumentID:    document.ID,
+				Status:        "partial",
+				DroppedFields: partial.DroppedFields,
+			})
+			log.Warnf("Documents updated partially: %v", err)
+			continue
+		}
+
+		failedCount++
+		outcomes = append(outcomes, documentUpdateOutcome{
+			DocumentID: document.ID,
+			Status:     "failed",
+		})
+		log.Errorf("Error updating document %d: %v", document.ID, err)
 	}
 
-	c.Status(http.StatusOK)
+	if failedCount == 0 && appliedCount == len(documents) {
+		hasPartial := slices.ContainsFunc(outcomes, func(outcome documentUpdateOutcome) bool {
+			return outcome.Status == "partial"
+		})
+		if !hasPartial {
+			c.Status(http.StatusOK)
+			return
+		}
+	}
+
+	status := "partial"
+	statusCode := http.StatusMultiStatus
+	if appliedCount == 0 {
+		status = "failed"
+		statusCode = http.StatusInternalServerError
+	}
+	c.JSON(statusCode, gin.H{
+		"status":   status,
+		"outcomes": outcomes,
+	})
 }
 
 // submitOCRJobRequest is the optional body of POST /api/documents/:id/ocr.
@@ -1004,6 +1057,16 @@ func (app *App) undoModificationHandler(c *gin.Context) {
 	// Ok, we're actually doing the update:
 	ctx := c.Request.Context()
 
+	if modification.ModField == "summary" {
+		if err := app.undoSummaryModification(ctx, modification); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to undo summary modification"})
+			log.Errorf("Failed to undo summary modification: %v", err)
+			return
+		}
+		c.Status(http.StatusOK)
+		return
+	}
+
 	// Make the document suggestions for UpdateDocuments
 	var suggestion DocumentSuggestion
 	suggestion.ID = modification.DocumentID
@@ -1050,6 +1113,19 @@ func (app *App) undoModificationHandler(c *gin.Context) {
 
 	// Else all was ok
 	c.Status(http.StatusOK)
+}
+
+func (app *App) undoSummaryModification(ctx context.Context, modification *ModificationHistory) error {
+	if modification.RemoteID == nil || *modification.RemoteID <= 0 {
+		return fmt.Errorf("modification %d is missing a valid Paperless note ID", modification.ID)
+	}
+	if err := app.Client.DeleteDocumentNote(ctx, modification.DocumentID, *modification.RemoteID); err != nil {
+		return fmt.Errorf("deleting Paperless note %d: %w", *modification.RemoteID, err)
+	}
+	if err := SetModificationUndone(app.Database, modification); err != nil {
+		return fmt.Errorf("marking modification %d as undone: %w", modification.ID, err)
+	}
+	return nil
 }
 
 // analyzeDocumentsHandler handles the POST /api/analyze-documents endpoint

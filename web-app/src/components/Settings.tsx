@@ -4,6 +4,18 @@ import React, { useEffect, useState } from 'react';
 import ConfigurationSection from './ConfigurationSection';
 import PromptsEditor from './PromptsEditor';
 import CustomFieldsEditor from './CustomFieldsEditor';
+import TagSettings from './TagSettings';
+
+export interface SettingsData {
+  custom_fields_enable: boolean;
+  custom_fields_selected_ids: number[];
+  custom_fields_write_mode: 'append' | 'replace' | 'update';
+  tags_auto_create: boolean;
+}
+
+interface SettingsResponse {
+  settings: SettingsData;
+}
 
 interface VersionInfo {
   version: string;
@@ -62,11 +74,48 @@ const SupportSection: React.FC = () => {
 };
 
 const Settings: React.FC = () => {
+  const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    axios
+      .get<SettingsResponse>('./api/settings')
+      .then((response) => {
+        if (!cancelled) {
+          setSettings(response.data.settings);
+          setSettingsError(null);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load editable settings:', error);
+        if (!cancelled) {
+          setSettingsError('Could not load editable settings.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:px-6">
       <h1 className="text-xl font-semibold">Settings</h1>
 
       <ConfigurationSection />
+
+      <TagSettings
+        settings={settings}
+        loading={settingsLoading}
+        loadError={settingsError}
+        onSettingsSaved={setSettings}
+      />
 
       {/* The editors bring their own panels; no extra card around them. */}
       <section aria-label="Prompts">
@@ -74,7 +123,12 @@ const Settings: React.FC = () => {
       </section>
 
       <section aria-label="Custom fields">
-        <CustomFieldsEditor />
+        <CustomFieldsEditor
+          settings={settings}
+          settingsLoading={settingsLoading}
+          settingsError={settingsError}
+          onSettingsSaved={setSettings}
+        />
       </section>
 
       <SupportSection />

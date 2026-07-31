@@ -142,14 +142,12 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 
 		// Skip OCR if the document already has the OCR complete tag
 		if app.pdfOCRTagging {
-			for _, tag := range document.Tags {
-				if tag == app.pdfOCRCompleteTag {
-					docLogger.Infof("Document already has OCR complete tag '%s', skipping OCR processing", app.pdfOCRCompleteTag)
-					return &ProcessedDocument{
-						ID:   documentID,
-						Text: document.Content,
-					}, nil
-				}
+			if containsTagCaseInsensitive(document.Tags, app.pdfOCRCompleteTag) {
+				docLogger.Infof("Document already has OCR complete tag '%s', skipping OCR processing", app.pdfOCRCompleteTag)
+				return &ProcessedDocument{
+					ID:   documentID,
+					Text: document.Content,
+				}, nil
 			}
 		}
 
