@@ -29,6 +29,7 @@ services:
     cap_add:
       - CHOWN
       - FOWNER
+      - KILL # Required by tini to forward shutdown signals after cap_drop: ALL.
       - SETGID
       - SETUID
     develop:
