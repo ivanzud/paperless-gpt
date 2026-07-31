@@ -96,13 +96,6 @@ func logOCRSettingsOverrides() {
 	}
 }
 
-// saveSettings saves the current settings to the settings.json file.
-func saveSettings() error {
-	settingsMutex.Lock()
-	defer settingsMutex.Unlock()
-	return saveSettingsLocked()
-}
-
 // saveSettingsLocked performs the actual saving without locking the mutex.
 // This is to be called from functions that already hold the lock.
 func saveSettingsLocked() error {

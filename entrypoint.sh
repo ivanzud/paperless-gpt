@@ -36,15 +36,23 @@ fi
 
 if ! getent passwd "${PUID}" >/dev/null 2>&1; then
     GROUP_NAME=$(getent group "${PGID}" | cut -d: -f1)
-    adduser -D -S -h /home/paperless-gpt -s /sbin/nologin -G "${GROUP_NAME:-nogroup}" -u "${PUID}" paperless-gpt \
+    adduser -D -H -S -h /home/paperless-gpt -s /sbin/nologin -G "${GROUP_NAME:-nogroup}" -u "${PUID}" paperless-gpt \
         || echo "WARN: could not create user paperless-gpt (UID ${PUID}); continuing with numeric UID"
 fi
 
 # Create necessary directories
+umask 027
 mkdir -p /app/prompts /app/config /app/db /home/paperless-gpt
 
-# Set ownership for app and home directories to handle all file permissions
-chown -R "${PUID}:${PGID}" /app /home/paperless-gpt
+# Only mutable state belongs to the runtime account. The executable,
+# entrypoint, and bundled defaults remain root-owned and non-writable.
+for MUTABLE_DIR in /app/prompts /app/config /app/db /home/paperless-gpt; do
+    # Reclaim the mount root first so restarts work with only CHOWN, SETUID,
+    # and SETGID capabilities even when the previous run left it mode 0750.
+    chown 0:0 "${MUTABLE_DIR}"
+    chmod 0750 "${MUTABLE_DIR}"
+    chown -R "${PUID}:${PGID}" "${MUTABLE_DIR}"
+done
 
 # Drop privileges and execute the main application. Numeric uid:gid makes
 # su-exec apply exactly the requested IDs, independent of which passwd/group

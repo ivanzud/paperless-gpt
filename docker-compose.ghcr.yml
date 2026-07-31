@@ -17,6 +17,7 @@ services:
       - ALL
     cap_add:
       - CHOWN
+      - FOWNER
       - SETGID
       - SETUID
     volumes:

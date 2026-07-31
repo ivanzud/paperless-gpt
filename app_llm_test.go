@@ -72,6 +72,7 @@ Content: {{.Content}}
 	testTagTemplate = `
 Language: {{.Language}}
 Tags: {{.AvailableTags}}
+CreateNewTags: {{.CreateNewTags}}
 Content: {{.Content}}
 `
 	testCorrespondentTemplate = `
@@ -160,7 +161,7 @@ Content: {{.Content}}
 
 			// Test with the app's LLM
 			ctx := context.Background()
-			_, err = app.getSuggestedTitle(ctx, truncatedContent, "Test Title", testLogger)
+			_, err = app.getSuggestedTitle(ctx, 0, truncatedContent, "Test Title", testLogger)
 			require.NoError(t, err)
 
 			// Verify truncation
@@ -270,16 +271,29 @@ func TestTokenLimitInTagGeneration(t *testing.T) {
 }
 
 func TestCreateNewTagsFiltering(t *testing.T) {
-	testLogger := logrus.WithField("test", "test")
+	testLogger := logrus.WithField("test", "create-new-tags")
 
 	// Initialize tag template for this test
 	var err error
 	tagTemplate, err = template.New("tag").Parse(testTagTemplate)
 	require.NoError(t, err)
 
-	// Save and restore createNewTags
+	// Save and restore both new-tag configuration sources.
 	originalCreateNewTags := createNewTags
-	defer func() { createNewTags = originalCreateNewTags }()
+	settingsMutex.RLock()
+	originalSettings := settings
+	settingsMutex.RUnlock()
+	defer func() {
+		createNewTags = originalCreateNewTags
+		settingsMutex.Lock()
+		settings = originalSettings
+		settingsMutex.Unlock()
+	}()
+	setTagsAutoCreate := func(enabled bool) {
+		settingsMutex.Lock()
+		settings.TagsAutoCreate = enabled
+		settingsMutex.Unlock()
+	}
 
 	ctx := context.Background()
 	availableTags := []string{"invoice", "receipt", "tax"}
@@ -287,6 +301,7 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 
 	t.Run("default filters out new tags", func(t *testing.T) {
 		createNewTags = false
+		setTagsAutoCreate(false)
 		mockLLM := &mockLLM{Response: "invoice, new-tag, receipt"}
 		app := &App{LLM: mockLLM}
 
@@ -296,10 +311,12 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		assert.Contains(t, tags, "invoice")
 		assert.Contains(t, tags, "receipt")
 		assert.NotContains(t, tags, "new-tag")
+		assert.Contains(t, mockLLM.lastPrompt, "CreateNewTags: false")
 	})
 
-	t.Run("createNewTags allows new tags", func(t *testing.T) {
+	t.Run("env flag allows new tags", func(t *testing.T) {
 		createNewTags = true
+		setTagsAutoCreate(false)
 		mockLLM := &mockLLM{Response: "invoice, new-tag, receipt"}
 		app := &App{LLM: mockLLM}
 
@@ -309,10 +326,26 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		assert.Contains(t, tags, "invoice")
 		assert.Contains(t, tags, "receipt")
 		assert.Contains(t, tags, "new-tag")
+		assert.Contains(t, mockLLM.lastPrompt, "CreateNewTags: true")
 	})
 
-	t.Run("createNewTags preserves existing tag casing", func(t *testing.T) {
+	t.Run("settings flag allows new tags", func(t *testing.T) {
+		createNewTags = false
+		setTagsAutoCreate(true)
+		mockLLM := &mockLLM{Response: "Invoice, NEW-TAG"}
+		app := &App{LLM: mockLLM}
+
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		require.NoError(t, err)
+
+		assert.Contains(t, tags, "invoice")
+		assert.Contains(t, tags, "NEW-TAG")
+		assert.Contains(t, mockLLM.lastPrompt, "CreateNewTags: true")
+	})
+
+	t.Run("new tags preserve existing tag casing", func(t *testing.T) {
 		createNewTags = true
+		setTagsAutoCreate(false)
 		mockLLM := &mockLLM{Response: "Invoice, NEW-TAG"}
 		app := &App{LLM: mockLLM}
 
@@ -325,8 +358,9 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		assert.Contains(t, tags, "NEW-TAG")
 	})
 
-	t.Run("createNewTags filters out empty tags", func(t *testing.T) {
+	t.Run("new tags filter out empty tags", func(t *testing.T) {
 		createNewTags = true
+		setTagsAutoCreate(false)
 		mockLLM := &mockLLM{Response: "invoice, , receipt"}
 		app := &App{LLM: mockLLM}
 
@@ -339,9 +373,74 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 	})
 }
 
+func TestGetSuggestedTagsFiltersProcessingTags(t *testing.T) {
+	previousTemplate := tagTemplate
+	tagTemplate = template.Must(template.New("tag").Parse(testTagTemplate))
+	t.Cleanup(func() {
+		tagTemplate = previousTemplate
+	})
+
+	originalManualTag := manualTag
+	originalAutoTag := autoTag
+	originalAutoOCRTag := autoOcrTag
+	originalPDFOCRCompleteTag := pdfOCRCompleteTag
+	t.Cleanup(func() {
+		manualTag = originalManualTag
+		autoTag = originalAutoTag
+		autoOcrTag = originalAutoOCRTag
+		pdfOCRCompleteTag = originalPDFOCRCompleteTag
+	})
+
+	manualTag = "paperless-gpt"
+	autoTag = "paperless-gpt-auto"
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+
+	originalCreateNewTags := createNewTags
+	settingsMutex.RLock()
+	originalSettings := settings
+	settingsMutex.RUnlock()
+	t.Cleanup(func() {
+		createNewTags = originalCreateNewTags
+		settingsMutex.Lock()
+		settings = originalSettings
+		settingsMutex.Unlock()
+	})
+	createNewTags = false
+	settingsMutex.Lock()
+	settings.TagsAutoCreate = false
+	settingsMutex.Unlock()
+
+	mockLLM := &mockLLM{Response: "finance, paperless-gpt-ocr-complete"}
+	app := &App{LLM: mockLLM}
+	availableTags := []string{
+		manualTag,
+		autoTag,
+		autoOcrTag,
+		pdfOCRCompleteTag,
+		"finance",
+	}
+
+	tags, err := app.getSuggestedTags(
+		context.Background(),
+		"sample content",
+		"Test Title",
+		availableTags,
+		nil,
+		logrus.WithField("test", "filter-processing-tags"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"finance"}, tags)
+	assert.Contains(t, mockLLM.lastPrompt, "Tags: [finance]")
+	assert.NotContains(t, mockLLM.lastPrompt, pdfOCRCompleteTag)
+}
+
 func TestTokenLimitInTitleGeneration(t *testing.T) {
 	originalTokenLimit := tokenLimit
 	defer func() { tokenLimit = originalTokenLimit }()
+	previousTemplate := titleTemplate
+	titleTemplate = template.Must(template.New("title").Parse(testTitleTemplate))
+	defer func() { titleTemplate = previousTemplate }()
 
 	testLogger := logrus.WithField("test", "test")
 
@@ -366,7 +465,7 @@ func TestTokenLimitInTitleGeneration(t *testing.T) {
 	// Call getSuggestedTitle
 	ctx := context.Background()
 
-	_, err := app.getSuggestedTitle(ctx, longContent, "Original Title", testLogger)
+	_, err := app.getSuggestedTitle(ctx, 0, longContent, "Original Title", testLogger)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -381,6 +480,9 @@ func TestTokenLimitInTitleGeneration(t *testing.T) {
 func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 	originalTokenLimit := tokenLimit
 	defer func() { tokenLimit = originalTokenLimit }()
+	previousTemplate := createdDateTemplate
+	createdDateTemplate = template.Must(template.New("created_date").Parse(testCreatedDateContentTemplate))
+	defer func() { createdDateTemplate = previousTemplate }()
 
 	testLogger := logrus.WithField("test", "test")
 
@@ -405,7 +507,7 @@ func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 	// Call getSuggestedCreatedDate
 	ctx := context.Background()
 
-	_, err := app.getSuggestedCreatedDate(ctx, longContent, testLogger)
+	_, err := app.getSuggestedCreatedDate(ctx, longContent, "Example Title", "example.pdf", testLogger)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -415,6 +517,32 @@ func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 
 	// Final prompt should be within token limit
 	assert.LessOrEqual(t, len(tokens), 50, "Final prompt should be within token limit")
+}
+
+func TestCreatedDatePromptIncludesDocumentContext(t *testing.T) {
+	previousTemplate := createdDateTemplate
+	createdDateTemplate = template.Must(template.New("created_date").Parse(`
+Title: {{.Title}}
+OriginalFileName: {{.OriginalFileName}}
+Content: {{.Content}}
+`))
+	t.Cleanup(func() {
+		createdDateTemplate = previousTemplate
+	})
+
+	mockLLM := &mockLLM{Response: "2026-06-17"}
+	app := &App{LLM: mockLLM}
+	_, err := app.getSuggestedCreatedDate(
+		context.Background(),
+		"invoice content",
+		"June Invoice",
+		"invoice-june.pdf",
+		logrus.WithField("test", "created-date-context"),
+	)
+	require.NoError(t, err)
+	assert.Contains(t, mockLLM.lastPrompt, "Title: June Invoice")
+	assert.Contains(t, mockLLM.lastPrompt, "OriginalFileName: invoice-june.pdf")
+	assert.NotContains(t, mockLLM.lastPrompt, "<no value>")
 }
 
 func TestPrepareSuggestionGenerationContextFetchesOnlyRequestedMetadata(t *testing.T) {
@@ -459,13 +587,18 @@ func TestPrepareSuggestionGenerationContextFetchesOnlyRequestedMetadata(t *testi
 // mockPaperlessClient is a mock implementation of the ClientInterface for testing.
 type mockPaperlessClient struct {
 	CustomFields              []CustomField
+	SimilarDocuments          []Document
 	Error                     error
+	SimilarDocumentsError     error
 	TagsError                 error
 	CorrespondentsError       error
 	DocumentTypesError        error
 	GetAllTagsCalls           int
 	GetAllCorrespondentsCalls int
 	GetAllDocumentTypesCalls  int
+	GetSimilarDocumentsCalls  int
+	LastSimilarDocumentID     int
+	LastSimilarDocumentCount  int
 }
 
 func (m *mockPaperlessClient) GetCustomFields(ctx context.Context) ([]CustomField, error) {
@@ -540,6 +673,15 @@ func (m *mockPaperlessClient) GetUiSettings(ctx context.Context) (*UiSettings, e
 func (m *mockPaperlessClient) GetPermissions(ctx context.Context, doc *Document) (*ObjPermissions, error) {
 	return &ObjPermissions{}, nil
 }
+func (m *mockPaperlessClient) GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error) {
+	m.GetSimilarDocumentsCalls++
+	m.LastSimilarDocumentID = documentID
+	m.LastSimilarDocumentCount = count
+	if m.SimilarDocumentsError != nil {
+		return nil, m.SimilarDocumentsError
+	}
+	return m.SimilarDocuments, nil
+}
 
 func TestGetSuggestedCustomFields(t *testing.T) {
 	// 1. Setup
@@ -607,6 +749,124 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 	dueDateField, ok := findFieldByID(suggestions, 2)
 	assert.True(t, ok, "Due Date (ID 2) should be in the suggestions")
 	assert.Equal(t, "2025-12-31", dueDateField.Value)
+}
+
+func TestGetSuggestedCustomFieldsNormalizesJSONWhitespace(t *testing.T) {
+	previousTemplate := customFieldTemplate
+	customFieldTemplate = template.Must(template.New("custom_field").Parse("{{.Content}}"))
+	t.Cleanup(func() {
+		customFieldTemplate = previousTemplate
+	})
+
+	tests := []struct {
+		name          string
+		response      string
+		expectedValue string
+	}{
+		{
+			name:          "byte order mark",
+			response:      "\ufeff[{\"field\":\"Invoice Number\",\"value\":\"INV-BOM\"}]",
+			expectedValue: "INV-BOM",
+		},
+		{
+			name:          "non-breaking spaces",
+			response:      "[\n\u00a0 {\n\u00a0 \"field\":\"Invoice Number\",\n\u00a0 \"value\":\"INV-NBSP\"\n\u00a0 }\n]",
+			expectedValue: "INV-NBSP",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			app := &App{
+				LLM: &mockLLM{Response: test.response},
+				Client: &mockPaperlessClient{
+					CustomFields: []CustomField{{ID: 1, Name: "Invoice Number", DataType: "string"}},
+				},
+			}
+
+			suggestions, err := app.getSuggestedCustomFields(
+				context.Background(),
+				Document{Content: "Invoice"},
+				[]int{1},
+				logrus.WithField("test", "json-whitespace"),
+			)
+			require.NoError(t, err)
+			require.Len(t, suggestions, 1)
+			assert.Equal(t, 1, suggestions[0].ID)
+			assert.Equal(t, test.expectedValue, suggestions[0].Value)
+		})
+	}
+}
+
+func TestGetSuggestedTitleSimilarDocumentContext(t *testing.T) {
+	previousTemplate := titleTemplate
+	titleTemplate = template.Must(template.New("title").Parse(`
+{{if .SimilarDocumentTitles}}Similar titles:
+{{range .SimilarDocumentTitles}}- {{.}}
+{{end}}{{end}}Original: {{.Title}}
+Content: {{.Content}}
+`))
+	t.Cleanup(func() {
+		titleTemplate = previousTemplate
+	})
+
+	tests := []struct {
+		name             string
+		similarDocuments []Document
+		similarError     error
+		expectedPrompt   []string
+		excludedPrompt   []string
+	}{
+		{
+			name: "similar documents",
+			similarDocuments: []Document{
+				{ID: 2, Title: "Invoice January 2023"},
+				{ID: 3, Title: " Invoice February 2023 "},
+				{ID: 4, Title: "  "},
+			},
+			expectedPrompt: []string{"Similar titles:", "Invoice January 2023", "Invoice February 2023"},
+			excludedPrompt: []string{"-   "},
+		},
+		{
+			name:           "no similar documents",
+			excludedPrompt: []string{"Similar titles:"},
+		},
+		{
+			name:           "similar document lookup error",
+			similarError:   fmt.Errorf("API error"),
+			excludedPrompt: []string{"Similar titles:"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockClient := &mockPaperlessClient{
+				SimilarDocuments:      test.similarDocuments,
+				SimilarDocumentsError: test.similarError,
+			}
+			mockLLM := &mockLLM{Response: "Generated Title"}
+			app := &App{LLM: mockLLM, Client: mockClient}
+
+			title, err := app.getSuggestedTitle(
+				context.Background(),
+				42,
+				"document content",
+				"document.pdf",
+				logrus.WithField("test", test.name),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, "Generated Title", title)
+			assert.Equal(t, 1, mockClient.GetSimilarDocumentsCalls)
+			assert.Equal(t, 42, mockClient.LastSimilarDocumentID)
+			assert.Equal(t, 5, mockClient.LastSimilarDocumentCount)
+			for _, expected := range test.expectedPrompt {
+				assert.Contains(t, mockLLM.lastPrompt, expected)
+			}
+			for _, excluded := range test.excludedPrompt {
+				assert.NotContains(t, mockLLM.lastPrompt, excluded)
+			}
+		})
+	}
 }
 
 // Helper function to find a custom field by ID in a slice

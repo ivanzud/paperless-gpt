@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1049,6 +1050,50 @@ func TestDownloadDocumentAsPDF(t *testing.T) {
 	assert.Equal(t, 1, totalPages)
 
 	// Testing with splitting=true would be more complex so we'll skip that for simplicity
+}
+
+func TestDownloadDocumentAsPDF_SplitWithPageLimit(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	const documentID = 456
+	pdfContent, err := os.ReadFile("tests/pdf/five-pager.pdf")
+	require.NoError(t, err)
+
+	downloadPath := fmt.Sprintf("/api/documents/%d/download/", documentID)
+	env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, writeErr := w.Write(pdfContent)
+		assert.NoError(t, writeErr)
+	})
+
+	env.client.CacheFolder = t.TempDir()
+	const limitPages = 2
+	pdfPaths, _, totalPages, err := env.client.DownloadDocumentAsPDF(
+		context.Background(),
+		documentID,
+		limitPages,
+		true,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 5, totalPages)
+	assert.Len(t, pdfPaths, limitPages)
+
+	for _, pdfPath := range pdfPaths {
+		_, err := os.Stat(pdfPath)
+		assert.NoError(t, err)
+	}
+
+	docDir := filepath.Join(env.client.CacheFolder, fmt.Sprintf("document-%d-pdf", documentID))
+	entries, err := os.ReadDir(docDir)
+	require.NoError(t, err)
+	splitFileCount := 0
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "original_") && strings.HasSuffix(entry.Name(), ".pdf") {
+			splitFileCount++
+		}
+	}
+	assert.Equal(t, limitPages, splitFileCount, "the page limit must bound split output")
 }
 
 func TestGetSimilarDocuments(t *testing.T) {

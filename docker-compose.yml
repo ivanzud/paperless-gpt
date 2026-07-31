@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-docker-local}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
     ports:
       - "8080:8080"
     init: true
@@ -10,14 +14,23 @@ services:
       # Set the user and group IDs for the container user.
       # This helps avoid permission issues with mounted volumes.
       # Find your user's ID with `id -u` and group ID with `id -g`.
-      - PUID=10001
-      - PGID=10001
+      PUID: ${PUID:-10001}
+      PGID: ${PGID:-10001}
     env_file:
       - .env
     volumes:
       - paperless-gpt-config:/app/config
       - paperless-gpt-db:/app/db
       - paperless-gpt-prompts:/app/prompts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - SETGID
+      - SETUID
     develop:
       watch:
         - action: rebuild

@@ -100,11 +100,22 @@ func (client *PaperlessClient) GetDocumentPageImage(ctx context.Context, documen
 		return nil, fmt.Errorf("page index must not be negative")
 	}
 
-	docDir := filepath.Join(client.GetCacheFolder(), fmt.Sprintf("document-%d", documentID))
-	if err := os.MkdirAll(docDir, 0755); err != nil {
+	cacheFolder, err := filepath.Abs(client.GetCacheFolder())
+	if err != nil {
+		return nil, fmt.Errorf("resolve cache folder: %w", err)
+	}
+	docDir, err := pathWithinBase(cacheFolder, fmt.Sprintf("document-%d", documentID))
+	if err != nil {
 		return nil, err
 	}
-	previewPath := filepath.Join(docDir, fmt.Sprintf("preview-page%03d.jpg", pageIndex))
+	if err := os.MkdirAll(docDir, 0750); err != nil {
+		return nil, err
+	}
+	previewPath, err := pathWithinBase(docDir, fmt.Sprintf("preview-page%03d.jpg", pageIndex))
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G304 -- pathWithinBase confines this integer-derived name to the cache directory.
 	if data, err := os.ReadFile(previewPath); err == nil {
 		return data, nil
 	}
@@ -130,11 +141,17 @@ func (client *PaperlessClient) GetDocumentPageImage(ctx context.Context, documen
 		return nil, err
 	}
 	defer os.Remove(tmpFile.Name())
-	if _, err := tmpFile.Write(pdfData); err != nil {
-		tmpFile.Close()
-		return nil, err
+	_, writeErr := tmpFile.Write(pdfData)
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		if closeErr != nil {
+			return nil, fmt.Errorf("write preview PDF: %w (close also failed: %v)", writeErr, closeErr)
+		}
+		return nil, writeErr
 	}
-	tmpFile.Close()
+	if closeErr != nil {
+		return nil, fmt.Errorf("close preview PDF: %w", closeErr)
+	}
 
 	doc, err := fitz.New(tmpFile.Name())
 	if err != nil {
@@ -163,8 +180,28 @@ func (client *PaperlessClient) GetDocumentPageImage(ctx context.Context, documen
 		return nil, err
 	}
 
-	if err := os.WriteFile(previewPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(previewPath, buf.Bytes(), 0600); err != nil {
 		log.Warnf("Failed to cache page preview for document %d page %d: %v", documentID, pageIndex, err)
 	}
 	return buf.Bytes(), nil
+}
+
+func pathWithinBase(base string, parts ...string) (string, error) {
+	basePath, err := filepath.Abs(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve base path: %w", err)
+	}
+	path := filepath.Join(append([]string{basePath}, parts...)...)
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve candidate path: %w", err)
+	}
+	relative, err := filepath.Rel(basePath, path)
+	if err != nil {
+		return "", fmt.Errorf("compare candidate path with base: %w", err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes base directory %q", path, basePath)
+	}
+	return path, nil
 }

@@ -24,10 +24,16 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
-      use: { 
+      name: 'desktop-chromium',
+      use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1280, height: 720 },
+      },
+    },
+    {
+      name: 'mobile-chromium',
+      use: {
+        ...devices['Pixel 7'],
       },
     },
   ],

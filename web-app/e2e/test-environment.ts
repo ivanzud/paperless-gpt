@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { GenericContainer, Network, StartedTestContainer, Wait } from 'testcontainers';
+import { inspectPaperlessTaskPayload } from './paperless-task.mjs';
 
 export interface TestEnvironment {
   paperlessNgx: StartedTestContainer;
@@ -96,12 +97,13 @@ export async function setupTestEnvironment(config?: TestEnvironmentConfig): Prom
     started.push(postgres);
 
     console.log('Starting Paperless-ngx container...');
-    const paperlessNgx = await new GenericContainer('ghcr.io/paperless-ngx/paperless-ngx:latest')
+    const paperlessNgx = await new GenericContainer('ghcr.io/paperless-ngx/paperless-ngx:3.0.4')
       .withNetwork(network)
       .withNetworkAliases('paperless-ngx')
       .withEnvironment({
         PAPERLESS_URL: `http://localhost:${paperlessPort}`,
-        PAPERLESS_SECRET_KEY: 'change-me',
+        PAPERLESS_SECRET_KEY:
+          'paperless-gpt-e2e-only-2026-07-31-do-not-use-outside-tests-4fc62ba31d93',
         PAPERLESS_ADMIN_USER: 'admin',
         PAPERLESS_ADMIN_PASSWORD: 'admin',
         PAPERLESS_TIME_ZONE: 'Europe/Berlin',
@@ -247,12 +249,14 @@ export async function uploadDocument(
     throw new Error(`Failed to upload document: ${uploadResponse.statusText}`);
   }
   
-  const task_id = await uploadResponse.json();
-  
+  const taskId = await uploadResponse.json();
+  const deadline = Date.now() + 60_000;
+  let pollDelayMs = 250;
+
   // Poll the tasks endpoint until document is processed
-  while (true) {
-    console.log(`Checking task status for ID: ${task_id}`);
-    const taskResponse = await fetch(`${baseUrl}/api/tasks/?task_id=${task_id}`, {
+  while (Date.now() < deadline) {
+    console.log(`Checking task status for ID: ${taskId}`);
+    const taskResponse = await fetch(`${baseUrl}/api/tasks/?task_id=${taskId}`, {
       headers: {
         'Authorization': 'Basic ' + btoa(`${credentials.username}:${credentials.password}`),
       },
@@ -262,19 +266,14 @@ export async function uploadDocument(
       throw new Error(`Failed to check task status: ${taskResponse.statusText}`);
     }
 
-    const taskResultArr = await taskResponse.json();
-    console.log(`Task status: ${JSON.stringify(taskResultArr)}`);
-
-    if (taskResultArr.length === 0) {
-      continue;
-    }
-    const taskResult = taskResultArr[0];
-    // Check if task is completed
-    if (taskResult.status === 'SUCCESS' && taskResult.id) {
-      console.log(`Document processed successfully with ID: ${taskResult.id}`);
+    const taskPayload = await taskResponse.json();
+    console.log(`Task status: ${JSON.stringify(taskPayload)}`);
+    const taskState = inspectPaperlessTaskPayload(taskPayload);
+    if (taskState.state === 'success') {
+      console.log(`Document processed successfully with ID: ${taskState.documentId}`);
       
       // Fetch the complete document details
-      const documentResponse = await fetch(`${baseUrl}/api/documents/${taskResult.id}/`, {
+      const documentResponse = await fetch(`${baseUrl}/api/documents/${taskState.documentId}/`, {
         headers: {
           'Authorization': 'Basic ' + btoa(`${credentials.username}:${credentials.password}`),
         },
@@ -287,14 +286,11 @@ export async function uploadDocument(
       return await documentResponse.json();
     }
     
-    // Check for failure
-    if (taskResult.status === 'FAILED') {
-      throw new Error(`Document processing failed: ${taskResult.result}`);
-    }
-    
-    // Wait before polling again
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, pollDelayMs));
+    pollDelayMs = Math.min(pollDelayMs * 2, 2_000);
   }
+
+  throw new Error(`Timed out waiting for Paperless task ${taskId}`);
 }
 // Helper to create a tag via Paperless-ngx API
 export async function createTag(
@@ -351,7 +347,7 @@ export async function getApiToken(
   }
 
   const token = await response.json();
-  console.log(`API token fetched successfully: ${token.token}`);
+  console.log('API token fetched successfully');
   return token.token;
 }
 

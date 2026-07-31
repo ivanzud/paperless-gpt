@@ -106,6 +106,11 @@ RUN chmod +x ./entrypoint.sh
 # Copy the prompt templates
 COPY default_prompts/ /app/default_prompts/
 
+# Runtime state is prepared by entrypoint.sh. Application code and bundled
+# defaults stay root-owned and cannot be replaced by the unprivileged process.
+RUN chmod 0555 /app/paperless-gpt /app/entrypoint.sh \
+    && chmod -R a-w /app/default_prompts
+
 # Expose the port the app runs on
 EXPOSE 8080
 
