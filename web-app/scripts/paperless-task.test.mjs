@@ -24,12 +24,24 @@ test('parses legacy task responses case-insensitively', () => {
   );
 });
 
+test('prefers the Paperless v9 related document over the legacy task record ID', () => {
+  assert.deepEqual(
+    inspectPaperlessTaskPayload([{
+      id: 99,
+      status: 'SUCCESS',
+      related_document: 17,
+    }]),
+    { state: 'success', documentId: 17 },
+  );
+});
+
 test('extracts document IDs from supported fallback fields', () => {
   const cases = [
     [{ status: 'success', result: { document_id: 21 } }, 21],
     [{ status: 'success', result: '22' }, 22],
     [{ status: 'success', document_id: 23 }, 23],
     [{ status: 'success', related_document_ids: [24] }, 24],
+    [{ status: 'success', related_document: '25' }, 25],
   ];
 
   for (const [task, expectedId] of cases) {

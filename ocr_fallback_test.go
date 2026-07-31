@@ -71,6 +71,14 @@ func (c *wholePDFFallbackClient) CreateTag(ctx context.Context, tagName string, 
 	return 0, nil
 }
 
+func (c *wholePDFFallbackClient) CreateDocumentNote(ctx context.Context, documentID int, note string) (DocumentNote, error) {
+	return DocumentNote{}, nil
+}
+
+func (c *wholePDFFallbackClient) DeleteDocumentNote(ctx context.Context, documentID int, noteID int) error {
+	return nil
+}
+
 func (c *wholePDFFallbackClient) DownloadDocumentAsImages(ctx context.Context, documentID int, pageLimit int) ([]string, int, error) {
 	return nil, 0, fmt.Errorf("unexpected image download")
 }

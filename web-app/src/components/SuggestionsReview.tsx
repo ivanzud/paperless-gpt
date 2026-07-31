@@ -25,8 +25,21 @@ interface SuggestionsReviewProps {
   filterTag: string | null;
   failedDocuments: SuggestionJobFailedDocument[];
   onRetryFailed: () => void;
-  onFinished: (appliedCount: number, fieldChanges: number) => void;
+  onFinished: (
+    appliedCount: number,
+    fieldChanges: number,
+    warning?: string
+  ) => void;
   onDiscard: () => void;
+}
+
+interface UpdateDocumentsResponse {
+  status?: "partial" | "failed";
+  outcomes?: {
+    document_id: number;
+    status: "applied" | "partial" | "failed";
+    dropped_fields?: string[];
+  }[];
 }
 
 const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
@@ -48,8 +61,16 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
   const [showSummary, setShowSummary] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const statsRef = useRef({ docs: 0, fields: 0 });
+  const [warning, setWarning] = useState<string | null>(null);
+  const statsRef = useRef({ docs: 0, fields: 0, warnings: [] as string[] });
   const finishedRef = useRef(false);
+  const finishWithStats = useCallback(() => {
+    onFinished(
+      statsRef.current.docs,
+      statsRef.current.fields,
+      statsRef.current.warnings.join(" ")
+    );
+  }, [onFinished]);
 
   // A retry job can append documents after mount.
   useEffect(() => {
@@ -97,6 +118,11 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
         ...item,
         suggested_created_date: createdDate,
       })),
+    onSummaryChange: (docId, summary) =>
+      updateItem(docId, (item) => ({
+        ...item,
+        suggested_summary: summary,
+      })),
     onCustomFieldSuggestionToggle: (docId, fieldId) =>
       updateItem(docId, (item) => ({
         ...item,
@@ -135,12 +161,13 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
     );
     if (allDecided) {
       finishedRef.current = true;
-      onFinished(statsRef.current.docs, statsRef.current.fields);
+      finishWithStats();
     }
-  }, [items, decisions, onFinished]);
+  }, [items, decisions, finishWithStats]);
 
   const applyDocuments = async (docsToApply: DocumentSuggestion[]) => {
     setError(null);
+    setWarning(null);
     const ids = docsToApply.map((doc) => doc.id);
     // Track applying ids incrementally so concurrent single-doc applies don't
     // clear each other's loading state.
@@ -150,31 +177,69 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
       return next;
     });
     try {
-      const payload = docsToApply.map((item) =>
-        buildUpdatePayload(item, excludedMap[item.id] || new Set())
-      );
-      await axios.patch("./api/update-documents", payload);
+      const appliedIds: number[] = [];
+      const partialWarnings: string[] = [];
+      let appliedChanges = 0;
+      let failedCount = 0;
 
-      statsRef.current.docs += docsToApply.length;
-      statsRef.current.fields += docsToApply.reduce(
-        (sum, item) =>
-          sum + countChanges(item, excludedMap[item.id] || new Set()),
-        0
-      );
+      for (const item of docsToApply) {
+        const payload = buildUpdatePayload(
+          item,
+          excludedMap[item.id] || new Set()
+        );
+        try {
+          const response = await axios.patch<UpdateDocumentsResponse>(
+            "./api/update-documents",
+            [payload]
+          );
+          const outcome = response.data?.outcomes?.find(
+            (candidate) => candidate.document_id === item.id
+          );
+          const droppedFields =
+            outcome?.status === "partial" ? outcome.dropped_fields || [] : [];
+
+          appliedIds.push(item.id);
+          appliedChanges += Math.max(
+            0,
+            countChanges(item, excludedMap[item.id] || new Set()) -
+              droppedFields.length
+          );
+
+          if (outcome?.status === "partial") {
+            const fields = droppedFields
+              .map((field) => field.replace(/_/g, " "))
+              .join(", ");
+            partialWarnings.push(
+              `Document ${item.id} was saved, but ${fields || "some requested changes"} could not be applied. Review the document and its History entries.`
+            );
+          }
+        } catch (err) {
+          failedCount += 1;
+          console.error(`Error updating document ${item.id}:`, err);
+        }
+      }
+
+      statsRef.current.docs += appliedIds.length;
+      statsRef.current.fields += appliedChanges;
+      statsRef.current.warnings.push(...partialWarnings);
 
       setDecisions((prev) => {
         const next = { ...prev };
-        docsToApply.forEach((doc) => {
-          next[doc.id] = "applied";
+        appliedIds.forEach((id) => {
+          next[id] = "applied";
         });
         return next;
       });
+
+      if (partialWarnings.length > 0) {
+        setWarning(partialWarnings.join(" "));
+      }
+      if (failedCount > 0) {
+        setError(
+          `${failedCount} ${failedCount === 1 ? "document remains" : "documents remain"} unapplied. Successful documents were marked done; retry the remaining ${failedCount === 1 ? "document" : "documents"} after checking the backend connection.`
+        );
+      }
       setShowSummary(false);
-    } catch (err) {
-      console.error("Error updating documents:", err);
-      setError(
-        "Applying the changes failed — nothing was marked as done. Check the backend connection and try again."
-      );
     } finally {
       setApplyingIds((prev) => {
         const next = new Set(prev);
@@ -201,7 +266,7 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
       setShowDiscardConfirm(true);
     } else if (!finishedRef.current) {
       finishedRef.current = true;
-      onFinished(statsRef.current.docs, statsRef.current.fields);
+      finishWithStats();
     }
   };
 
@@ -250,6 +315,18 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
         >
           <span>{error}</span>
           <Button size="sm" variant="secondary" onClick={() => setError(null)}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      {warning && (
+        <div
+          role="status"
+          className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warn bg-warn-tint px-4 py-3 text-sm text-warn"
+        >
+          <span>{warning}</span>
+          <Button size="sm" variant="secondary" onClick={() => setWarning(null)}>
             Dismiss
           </Button>
         </div>
@@ -320,7 +397,7 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
         onConfirm={() => {
           setShowDiscardConfirm(false);
           if (statsRef.current.docs > 0) {
-            onFinished(statsRef.current.docs, statsRef.current.fields);
+            finishWithStats();
           } else {
             onDiscard();
           }

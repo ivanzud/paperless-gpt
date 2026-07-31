@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import type { SettingsData } from './Settings';
 
 interface CustomField {
   id: number;
@@ -6,14 +7,23 @@ interface CustomField {
   data_type: string;
 }
 
-interface SettingsData {
-  custom_fields_enable: boolean;
-  custom_fields_selected_ids: number[];
-  custom_fields_write_mode: 'append' | 'replace' | 'update';
-  tags_auto_create: boolean; // NEW: Tag auto-creation setting
+interface CustomFieldsEditorProps {
+  settings: SettingsData | null;
+  settingsLoading: boolean;
+  settingsError: string | null;
+  onSettingsSaved: (settings: SettingsData) => void;
 }
 
-const CustomFieldsEditor: React.FC = () => {
+interface SettingsResponse {
+  settings: SettingsData;
+}
+
+const CustomFieldsEditor: React.FC<CustomFieldsEditorProps> = ({
+  settings: serverSettings,
+  settingsLoading,
+  settingsError,
+  onSettingsSaved,
+}) => {
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [initialSettings, setInitialSettings] = useState<SettingsData | null>(null);
@@ -25,13 +35,8 @@ const CustomFieldsEditor: React.FC = () => {
 
   const fetchInitialData = useCallback(async (forcePull = false) => {
     setIsLoading(true);
+    setError(null);
     try {
-      const settingsRes = await fetch('./api/settings');
-      if (!settingsRes.ok) throw new Error('Failed to fetch settings');
-      const settingsData = await settingsRes.json();
-      setSettings(settingsData.settings);
-      setInitialSettings(settingsData.settings);
-
       const customFieldsUrl = forcePull ? './api/custom_fields?force_pull=true' : './api/custom_fields';
       const customFieldsRes = await fetch(customFieldsUrl);
       if (customFieldsRes.ok) {
@@ -56,6 +61,13 @@ const CustomFieldsEditor: React.FC = () => {
   }, [fetchInitialData]);
 
   useEffect(() => {
+    if (serverSettings && !isDirty) {
+      setSettings(serverSettings);
+      setInitialSettings(serverSettings);
+    }
+  }, [serverSettings, isDirty]);
+
+  useEffect(() => {
     if (initialSettings && settings) {
       const hasChanged = JSON.stringify(settings) !== JSON.stringify(initialSettings);
       setIsDirty(hasChanged);
@@ -67,21 +79,13 @@ const CustomFieldsEditor: React.FC = () => {
     setIsSaving(true);
     setError(null);
     try {
-      // 1. Fetch current settings to avoid overwriting unrelated keys
-      const latestRes = await fetch('/api/settings');
-      const latest = latestRes.ok ? await latestRes.json() : {};
-      // Extract just the settings data, ignoring any custom_fields that might be returned
-      const latestSettings = latest.settings || latest;
-      
-      // 2. Merge only our custom‐fields keys
       const payload = {
-        ...latestSettings,
         custom_fields_selected_ids: settings.custom_fields_selected_ids,
         custom_fields_write_mode: settings.custom_fields_write_mode,
         custom_fields_enable: settings.custom_fields_enable,
       };
       
-      const response = await fetch('/api/settings', {
+      const response = await fetch('./api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -90,7 +94,10 @@ const CustomFieldsEditor: React.FC = () => {
         const errData = await response.json();
         throw new Error(errData.error || 'Failed to save settings');
       }
-      setInitialSettings(settings);
+      const saved = (await response.json() as SettingsResponse).settings;
+      setSettings(saved);
+      setInitialSettings(saved);
+      onSettingsSaved(saved);
       setSuccessMessage('Settings saved successfully!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
@@ -100,7 +107,7 @@ const CustomFieldsEditor: React.FC = () => {
     } finally {
       setIsSaving(false);
     }
-  }, [settings, isDirty]);
+  }, [settings, isDirty, onSettingsSaved]);
 
   const handleSettingChange = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) => {
     setSettings((prev) => (prev ? { ...prev, [key]: value } : null));
@@ -114,14 +121,14 @@ const CustomFieldsEditor: React.FC = () => {
     handleSettingChange('custom_fields_selected_ids', newSelectedIds);
   };
 
-  if (isLoading) {
+  if (isLoading || settingsLoading) {
     return <div className="p-6">Loading...</div>;
   }
 
-  if (error) {
+  if (error || settingsError) {
     return (
       <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative m-6" role="alert">
-        <span className="block sm:inline">{error}</span>
+        <span className="block sm:inline">{error || settingsError}</span>
       </div>
     );
   }

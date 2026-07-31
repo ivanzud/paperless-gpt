@@ -18,6 +18,7 @@ export interface Document {
   tags: string[];
   correspondent: string;
   created_date?: string;
+  original_file_name?: string;
   document_type_name?: string;
 }
 
@@ -29,6 +30,7 @@ export interface GenerateSuggestionsRequest {
   generate_document_types?: boolean;
   generate_created_date?: boolean;
   generate_custom_fields?: boolean;
+  generate_summary?: boolean;
   selected_custom_field_ids?: number[];
   custom_field_write_mode?: string;
 }
@@ -50,6 +52,7 @@ export interface DocumentSuggestion {
   suggested_document_type?: string;
   suggested_created_date?: string;
   suggested_custom_fields?: CustomFieldSuggestion[];
+  suggested_summary?: string;
 }
 
 export interface TagOption {
@@ -100,6 +103,7 @@ const DocumentProcessor: React.FC = () => {
     documentTypes: true,
     createdDate: true,
     customFields: true,
+    summary: true,
   });
   const [job, setJob] = useState<SuggestionJobStatus | null>(null);
   const [failedDocuments, setFailedDocuments] = useState<
@@ -253,6 +257,7 @@ const DocumentProcessor: React.FC = () => {
         generate_document_types: flags.documentTypes,
         generate_created_date: flags.createdDate,
         generate_custom_fields: flags.customFields,
+        generate_summary: flags.summary,
       };
       const { data } = await axios.post<{ job_id: string }>(
         "./api/jobs/suggestions",
@@ -357,17 +362,21 @@ const DocumentProcessor: React.FC = () => {
     }
   }, [documents, phase]);
 
-  const finishReview = (appliedCount: number, fieldChanges: number) => {
+  const finishReview = (
+    appliedCount: number,
+    fieldChanges: number,
+    warning?: string
+  ) => {
     localStorage.removeItem(ACTIVE_JOB_KEY);
     setSuggestions(null);
     setJob(null);
     setFailedDocuments([]);
     setToast({
-      kind: "success",
+      kind: warning ? "info" : "success",
       message:
         appliedCount === 0
           ? "Review closed. No documents were changed."
-          : `Applied ${fieldChanges} field ${fieldChanges === 1 ? "change" : "changes"} to ${appliedCount} ${appliedCount === 1 ? "document" : "documents"}.`,
+          : `Applied ${fieldChanges} field ${fieldChanges === 1 ? "change" : "changes"} to ${appliedCount} ${appliedCount === 1 ? "document" : "documents"}.${warning ? ` ${warning}` : ""}`,
       action:
         appliedCount > 0
           ? { label: "Review in History", to: "/history" }

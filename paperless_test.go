@@ -302,20 +302,22 @@ func TestGetDocumentsByTag(t *testing.T) {
 	documentsResponse := GetDocumentsApiResponse{
 		Results: []GetDocumentApiResponseResult{
 			{
-				ID:            1,
-				Title:         "Document 1",
-				Content:       "Content 1",
-				Tags:          []int{1, 2},
-				Correspondent: 1,
-				CreatedDate:   "1999-09-01",
+				ID:               1,
+				Title:            "Document 1",
+				Content:          "Content 1",
+				Tags:             []int{1, 2},
+				Correspondent:    1,
+				CreatedDate:      "1999-09-01",
+				OriginalFileName: "invoice-1999.pdf",
 			},
 			{
-				ID:            2,
-				Title:         "Document 2",
-				Content:       "Content 2",
-				Tags:          []int{2, 3},
-				Correspondent: 2,
-				CreatedDate:   "1999-09-02",
+				ID:               2,
+				Title:            "Document 2",
+				Content:          "Content 2",
+				Tags:             []int{2, 3},
+				Correspondent:    2,
+				CreatedDate:      "1999-09-02",
+				OriginalFileName: "receipt-1999.pdf",
 			},
 		},
 	}
@@ -366,20 +368,22 @@ func TestGetDocumentsByTag(t *testing.T) {
 
 	expectedDocuments := []Document{
 		{
-			ID:            1,
-			Title:         "Document 1",
-			Content:       "Content 1",
-			Tags:          []string{"tag1", "tag2"},
-			Correspondent: "Alpha",
-			CreatedDate:   "1999-09-01",
+			ID:               1,
+			Title:            "Document 1",
+			Content:          "Content 1",
+			Tags:             []string{"tag1", "tag2"},
+			Correspondent:    "Alpha",
+			CreatedDate:      "1999-09-01",
+			OriginalFileName: "invoice-1999.pdf",
 		},
 		{
-			ID:            2,
-			Title:         "Document 2",
-			Content:       "Content 2",
-			Tags:          []string{"tag2", "tag3"},
-			Correspondent: "Beta",
-			CreatedDate:   "1999-09-02",
+			ID:               2,
+			Title:            "Document 2",
+			Content:          "Content 2",
+			Tags:             []string{"tag2", "tag3"},
+			Correspondent:    "Beta",
+			CreatedDate:      "1999-09-02",
+			OriginalFileName: "receipt-1999.pdf",
 		},
 	}
 
@@ -794,6 +798,477 @@ func TestUpdateDocuments_CreatesMissingSystemTag(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUpdateDocumentsAppliesAutoTagComplete(t *testing.T) {
+	previousAutoTagComplete := autoTagComplete
+	previousCreateNewTags := createNewTags
+	settingsMutex.RLock()
+	previousSettings := settings
+	settingsMutex.RUnlock()
+	t.Cleanup(func() {
+		autoTagComplete = previousAutoTagComplete
+		createNewTags = previousCreateNewTags
+		settingsMutex.Lock()
+		settings = previousSettings
+		settingsMutex.Unlock()
+	})
+
+	autoTagComplete = "paperless-gpt-auto-complete"
+	createNewTags = false
+	settingsMutex.Lock()
+	settings.TagsAutoCreate = false
+	settingsMutex.Unlock()
+
+	for _, testCase := range []struct {
+		name           string
+		existingTag    bool
+		existingName   string
+		expectedTagIDs []int
+		expectedPosts  int
+	}{
+		{
+			name:           "uses existing tag case-insensitively",
+			existingTag:    true,
+			existingName:   "Paperless-GPT-Auto-Complete",
+			expectedTagIDs: []int{10, 20},
+		},
+		{
+			name:           "creates missing protected tag with auto creation disabled",
+			expectedTagIDs: []int{10, 20},
+			expectedPosts:  1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			defer env.teardown()
+
+			postCalls := 0
+			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					results := []map[string]interface{}{{"id": 10, "name": "invoice"}}
+					if testCase.existingTag {
+						results = append(results, map[string]interface{}{"id": 20, "name": testCase.existingName})
+					}
+					w.WriteHeader(http.StatusOK)
+					require.NoError(t, json.NewEncoder(w).Encode(map[string]interface{}{"results": results}))
+				case http.MethodPost:
+					postCalls++
+					var payload TagRequest
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+					assert.Equal(t, autoTagComplete, payload.Name)
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"id":20}`))
+				default:
+					t.Fatalf("unexpected tags method: %s", r.Method)
+				}
+			})
+
+			env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPatch, r.Method)
+				var payload struct {
+					Tags []int `json:"tags"`
+				}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+				assert.Equal(t, testCase.expectedTagIDs, payload.Tags)
+				w.WriteHeader(http.StatusOK)
+			})
+
+			document := DocumentSuggestion{
+				ID:               1,
+				OriginalDocument: Document{ID: 1, Title: "Invoice", Tags: []string{"invoice"}},
+				AddTags:          []string{strings.ToUpper(autoTagComplete)},
+			}
+
+			err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+			require.NoError(t, err)
+			assert.Equal(t, testCase.expectedPosts, postCalls)
+
+			var tagHistory ModificationHistory
+			require.NoError(t, env.db.
+				Where("document_id = ? AND mod_field = ?", document.ID, "tags").
+				Order("id DESC").
+				First(&tagHistory).Error)
+			var previousTags []string
+			var newTags []string
+			require.NoError(t, json.Unmarshal([]byte(tagHistory.PreviousValue), &previousTags))
+			require.NoError(t, json.Unmarshal([]byte(tagHistory.NewValue), &newTags))
+			assert.Equal(t, []string{"invoice"}, previousTags)
+			expectedCompleteName := autoTagComplete
+			if testCase.existingTag {
+				expectedCompleteName = testCase.existingName
+			}
+			assert.ElementsMatch(t, []string{"invoice", expectedCompleteName}, newTags)
+		})
+	}
+}
+
+func TestParseCreatedDocumentNote(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+		id   int
+	}{
+		{
+			name: "list selects newest matching note",
+			body: `[{"id":2,"note":"Reviewed summary"},{"id":77,"note":"Reviewed summary"},{"id":90,"note":"Other"}]`,
+			id:   77,
+		},
+		{
+			name: "notes envelope",
+			body: `{"notes":[{"id":78,"note":"Reviewed summary"}]}`,
+			id:   78,
+		},
+		{
+			name: "results envelope",
+			body: `{"results":[{"id":79,"note":"Reviewed summary"}]}`,
+			id:   79,
+		},
+		{
+			name: "single note",
+			body: `{"id":80,"note":"Reviewed summary"}`,
+			id:   80,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			note, err := parseCreatedDocumentNote([]byte(testCase.body), "Reviewed summary")
+			require.NoError(t, err)
+			assert.Equal(t, testCase.id, note.ID)
+			assert.Equal(t, "Reviewed summary", note.Note)
+		})
+	}
+
+	_, err := parseCreatedDocumentNote([]byte(`[{"id":77,"note":"Different"}]`), "Reviewed summary")
+	require.Error(t, err)
+}
+
+func TestUpdateDocumentsAppliesSuggestedSummaryAsNote(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 901
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/documents/901/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		var payload struct {
+			Note string `json:"note"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Equal(t, "Reviewed summary", payload.Note)
+		assert.Empty(t, r.URL.Query())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":2,"note":"Existing note"},{"id":77,"note":"Reviewed summary"}]`))
+	})
+
+	document := DocumentSuggestion{
+		ID:               documentID,
+		OriginalDocument: Document{ID: documentID, Title: "Invoice"},
+		SuggestedSummary: "Reviewed summary",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	require.NoError(t, err)
+
+	var modification ModificationHistory
+	require.NoError(t, env.db.Where("document_id = ? AND mod_field = ?", documentID, "summary").First(&modification).Error)
+	assert.Empty(t, modification.PreviousValue)
+	assert.Equal(t, "Reviewed summary", modification.NewValue)
+	require.NotNil(t, modification.RemoteID)
+	assert.Equal(t, 77, *modification.RemoteID)
+}
+
+func TestUpdateDocumentsSummaryPostFailureDoesNotCreateHistory(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 902
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/documents/902/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"detail":"sensitive document content"}`))
+	})
+
+	document := DocumentSuggestion{
+		ID:               documentID,
+		OriginalDocument: Document{ID: documentID, Title: "Invoice"},
+		SuggestedSummary: "Reviewed summary",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	require.Error(t, err)
+	var partial *PartialUpdateError
+	assert.False(t, errors.As(err, &partial))
+	assert.NotContains(t, err.Error(), "sensitive document content")
+
+	var count int64
+	require.NoError(t, env.db.Model(&ModificationHistory{}).Where("document_id = ? AND mod_field = ?", documentID, "summary").Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestUpdateDocumentsReturnsPartialWhenSummaryFailsAfterMetadata(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 903
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/documents/903/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		var payload map[string]interface{}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Equal(t, "Updated invoice", payload["title"])
+		w.WriteHeader(http.StatusOK)
+	})
+	env.setMockResponse("/api/documents/903/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusBadGateway)
+	})
+
+	document := DocumentSuggestion{
+		ID:               documentID,
+		OriginalDocument: Document{ID: documentID, Title: "Invoice"},
+		SuggestedTitle:   "Updated invoice",
+		SuggestedSummary: "Reviewed summary",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, documentID, partial.DocumentID)
+	assert.Equal(t, []string{"summary"}, partial.DroppedFields)
+
+	var titleCount int64
+	require.NoError(t, env.db.Model(&ModificationHistory{}).Where("document_id = ? AND mod_field = ?", documentID, "title").Count(&titleCount).Error)
+	assert.EqualValues(t, 1, titleCount)
+
+	var summaryCount int64
+	require.NoError(t, env.db.Model(&ModificationHistory{}).Where("document_id = ? AND mod_field = ?", documentID, "summary").Count(&summaryCount).Error)
+	assert.Zero(t, summaryCount)
+}
+
+func TestUpdateDocumentsAddsSummaryAfterMetadata(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 904
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+
+	var requestOrder []string
+	env.setMockResponse("/api/documents/904/", func(w http.ResponseWriter, r *http.Request) {
+		requestOrder = append(requestOrder, "metadata")
+		assert.Equal(t, http.MethodPatch, r.Method)
+		w.WriteHeader(http.StatusOK)
+	})
+	env.setMockResponse("/api/documents/904/notes/", func(w http.ResponseWriter, r *http.Request) {
+		requestOrder = append(requestOrder, "summary")
+		assert.Equal(t, http.MethodPost, r.Method)
+
+		var titleHistoryCount int64
+		require.NoError(t, env.db.Model(&ModificationHistory{}).
+			Where("document_id = ? AND mod_field = ?", documentID, "title").
+			Count(&titleHistoryCount).Error)
+		assert.EqualValues(t, 1, titleHistoryCount)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":91,"note":"Reviewed summary"}]`))
+	})
+
+	document := DocumentSuggestion{
+		ID:               documentID,
+		OriginalDocument: Document{ID: documentID, Title: "Invoice"},
+		SuggestedTitle:   "Updated invoice",
+		SuggestedSummary: "Reviewed summary",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"metadata", "summary"}, requestOrder)
+
+	var summary ModificationHistory
+	require.NoError(t, env.db.Where("document_id = ? AND mod_field = ?", documentID, "summary").First(&summary).Error)
+	require.NotNil(t, summary.RemoteID)
+	assert.Equal(t, 91, *summary.RemoteID)
+}
+
+func TestUpdateDocumentsAddsSummaryWhenAllMetadataIsDropped(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 905
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/documents/905/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":92,"note":"Reviewed summary"}]`))
+	})
+
+	document := DocumentSuggestion{
+		ID:                   documentID,
+		OriginalDocument:     Document{ID: documentID, Title: "Invoice", CreatedDate: "2024-01-01"},
+		SuggestedCreatedDate: "2024-99-99",
+		SuggestedSummary:     "Reviewed summary",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, []string{"created_date"}, partial.DroppedFields)
+
+	var summary ModificationHistory
+	require.NoError(t, env.db.Where("document_id = ? AND mod_field = ?", documentID, "summary").First(&summary).Error)
+	require.NotNil(t, summary.RemoteID)
+	assert.Equal(t, 92, *summary.RemoteID)
+}
+
+func TestUpdateDocumentsReportsLocallyDroppedFieldWithoutSummary(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 909
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+
+	document := DocumentSuggestion{
+		ID:                   documentID,
+		OriginalDocument:     Document{ID: documentID, Title: "Invoice", CreatedDate: "2024-01-01"},
+		SuggestedCreatedDate: "2024-99-99",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, documentID, partial.DocumentID)
+	assert.Equal(t, []string{"created_date"}, partial.DroppedFields)
+}
+
+func TestUpdateDocumentsReportsAllFieldsRejectedWithoutSummary(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 910
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/documents/910/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"title":["Invalid title"]}`))
+	})
+
+	document := DocumentSuggestion{
+		ID:               documentID,
+		OriginalDocument: Document{ID: documentID, Title: "Invoice"},
+		SuggestedTitle:   "Rejected title",
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, documentID, partial.DocumentID)
+	assert.Equal(t, []string{"title"}, partial.DroppedFields)
+}
+
+func TestCreateDocumentNoteRejectsInvalidSuccessResponse(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/documents/906/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":93,"note":"Different note"}]`))
+	})
+
+	_, err := env.client.CreateDocumentNote(context.Background(), 906, "Reviewed summary")
+	require.Error(t, err)
+}
+
+func TestSummaryHistoryFailureDeletesCreatedNote(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 907
+
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "history.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&ModificationHistory{}))
+	require.NoError(t, db.Exec(`
+		CREATE TRIGGER reject_summary_history
+		BEFORE INSERT ON modification_histories
+		BEGIN
+			SELECT RAISE(FAIL, 'history unavailable');
+		END;
+	`).Error)
+
+	var requestOrder []string
+	env.setMockResponse("/api/documents/907/notes/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			requestOrder = append(requestOrder, "create")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"id":94,"note":"Reviewed summary"}]`))
+		case http.MethodDelete:
+			requestOrder = append(requestOrder, "delete")
+			assert.Equal(t, "94", r.URL.Query().Get("id"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+	})
+
+	err = env.client.addSummaryNoteAndHistory(context.Background(), documentID, "Reviewed summary", db)
+	require.Error(t, err)
+	assert.Equal(t, []string{"create", "delete"}, requestOrder)
+}
+
+func TestDeleteDocumentNoteAcceptsPaperlessResponse(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/documents/908/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "95", r.URL.Query().Get("id"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":1,"note":"Unrelated note"}]`))
+	})
+
+	require.NoError(t, env.client.DeleteDocumentNote(context.Background(), 908, 95))
+}
+
+func TestDeleteDocumentNoteRejectsNon2xx(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/documents/1/notes/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "77", r.URL.Query().Get("id"))
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"detail":"sensitive document content"}`))
+	})
+
+	err := env.client.DeleteDocumentNote(context.Background(), 1, 77)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "sensitive document content")
+}
+
 // TestUpdateDocuments_RemovingLastTag tests the behavior when removing the last remaining tag
 // from a document, which Paperless-NGX REST API does not allow (empty tags array is rejected).
 // The test covers two scenarios:
@@ -867,6 +1342,27 @@ func TestUpdateDocuments_RemovingLastTag(t *testing.T) {
 				assert.Empty(t, tagSlice, "tags array should be empty to remove manual tag")
 			},
 		},
+		{
+			name: "case_insensitive_queue_tag_with_no_other_changes",
+			document: DocumentSuggestion{
+				ID: 3,
+				OriginalDocument: Document{
+					ID:          3,
+					Title:       "Same Title",
+					Tags:        []string{strings.ToUpper(manualTag)},
+					CreatedDate: "1999-09-01",
+				},
+				RemoveTags: []string{manualTag, autoTag},
+			},
+			expectUpdateCalls: 1,
+			validateCalls: func(t *testing.T, calls []map[string]interface{}) {
+				tagsValue, tagsPresent := calls[0]["tags"]
+				require.True(t, tagsPresent, "Must include tags field to remove case-variant queue tag")
+				tagSlice, ok := tagsValue.([]interface{})
+				require.True(t, ok, "tags should be an array")
+				assert.Empty(t, tagSlice)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -931,6 +1427,18 @@ func TestUpdateDocuments_RemovingLastTag(t *testing.T) {
 			if tt.expectUpdateCalls > 0 {
 				tt.validateCalls(t, updateCalls)
 			}
+
+			var tagHistory ModificationHistory
+			require.NoError(t, env.db.
+				Where("document_id = ? AND mod_field = ?", tt.document.ID, "tags").
+				Order("id DESC").
+				First(&tagHistory).Error)
+			var previousTags []string
+			var newTags []string
+			require.NoError(t, json.Unmarshal([]byte(tagHistory.PreviousValue), &previousTags))
+			require.NoError(t, json.Unmarshal([]byte(tagHistory.NewValue), &newTags))
+			assert.Equal(t, tt.document.OriginalDocument.Tags, previousTags)
+			assert.Empty(t, newTags)
 		})
 	}
 }
@@ -1229,19 +1737,27 @@ func TestGetSimilarDocuments_TagsError(t *testing.T) {
 }
 
 func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
-	// Set environment variables for the test
-	originalManualTag := os.Getenv("MANUAL_TAG")
-	originalAutoTag := os.Getenv("AUTO_TAG")
-	defer func() {
-		os.Setenv("MANUAL_TAG", originalManualTag)
-		os.Setenv("AUTO_TAG", originalAutoTag)
-	}()
+	originalManualTag := manualTag
+	originalAutoTag := autoTag
+	originalAutoOCRTag := autoOcrTag
+	originalPDFOCRCompleteTag := pdfOCRCompleteTag
+	originalFailTag := failTag
+	originalAutoTagComplete := autoTagComplete
+	t.Cleanup(func() {
+		manualTag = originalManualTag
+		autoTag = originalAutoTag
+		autoOcrTag = originalAutoOCRTag
+		pdfOCRCompleteTag = originalPDFOCRCompleteTag
+		failTag = originalFailTag
+		autoTagComplete = originalAutoTagComplete
+	})
 
-	// Set the tag values and reinitialize the global variables
-	os.Setenv("MANUAL_TAG", "paperless-gpt")
-	os.Setenv("AUTO_TAG", "paperless-gpt-auto")
 	manualTag = "paperless-gpt"
 	autoTag = "paperless-gpt-auto"
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+	failTag = "paperless-gpt-failed"
+	autoTagComplete = "paperless-gpt-auto-complete"
 
 	env := newTestEnv(t)
 	defer env.teardown()
@@ -1249,8 +1765,9 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 	// Mock similar documents
 	similarDocs := []GetDocumentApiResponseResult{
 		{
-			ID:    2,
-			Title: "Test Document 1",
+			ID:               2,
+			Title:            "Test Document 1",
+			OriginalFileName: "similar-document.pdf",
 		},
 	}
 
@@ -1274,8 +1791,12 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "regular-tag"},
-				{"id": 2, "name": "paperless-gpt"},      // manualTag
-				{"id": 3, "name": "paperless-gpt-auto"}, // autoTag
+				{"id": 2, "name": "PAPERLESS-GPT"},
+				{"id": 3, "name": "paperless-gpt-auto"},
+				{"id": 4, "name": "Paperless-GPT-OCR-Auto"},
+				{"id": 5, "name": "paperless-gpt-ocr-complete"},
+				{"id": 6, "name": "PAPERLESS-GPT-FAILED"},
+				{"id": 7, "name": "paperless-gpt-auto-complete"},
 			},
 			"next": nil,
 		})
@@ -1285,16 +1806,17 @@ func TestGetSimilarDocuments_ExcludesPaperlessGPTTags(t *testing.T) {
 	documents, err := env.client.GetSimilarDocuments(ctx, 1, 5)
 	require.NoError(t, err)
 	assert.Len(t, documents, 1)
+	assert.Equal(t, "similar-document.pdf", documents[0].OriginalFileName)
 
 	// Verify that the query excludes the paperless-gpt tags
 	assert.Contains(t, receivedQuery, "ordering=-score")
 	assert.Contains(t, receivedQuery, "truncate_content=true")
 	assert.Contains(t, receivedQuery, "more_like_id=1")
 	assert.Contains(t, receivedQuery, "page_size=5")
-	// Check that tag exclusion is present (order may vary)
-	assert.True(t,
-		strings.Contains(receivedQuery, "tags__id__none=2,3") || strings.Contains(receivedQuery, "tags__id__none=3,2"),
-		"Should exclude paperless-gpt tags with IDs 2 and 3 (in any order), got: %s", receivedQuery)
+	queryValues, err := url.ParseQuery(receivedQuery)
+	require.NoError(t, err)
+	excludedIDs := strings.Split(queryValues.Get("tags__id__none"), ",")
+	assert.ElementsMatch(t, []string{"2", "3", "4", "5", "6", "7"}, excludedIDs)
 }
 
 func TestGetSimilarDocuments_NoPaperlessGPTTagsToExclude(t *testing.T) {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"text/template"
 	"time"
@@ -119,13 +121,13 @@ type OCRTestCase struct {
 // This our appStub for background processing isolation without real invocation
 type appStubBG struct {
 	*App
-	ocrCalls int
-	tagCalls int
+	ocrCalls atomic.Int64
+	tagCalls atomic.Int64
 }
 
 func (a *appStubBG) isOcrEnabled() bool { return true }
 func (a *appStubBG) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
-	a.ocrCalls++
+	a.ocrCalls.Add(1)
 	// Return fixed count for background test
 	if a.App == nil {
 		return 1, nil
@@ -134,7 +136,7 @@ func (a *appStubBG) processAutoOcrTagDocuments(ctx context.Context) (int, error)
 }
 
 func (a *appStubBG) processAutoTagDocuments(ctx context.Context) (int, error) {
-	a.tagCalls++
+	a.tagCalls.Add(1)
 	// Return fixed count for background test
 	if a.App == nil {
 		return 1, nil
@@ -303,16 +305,11 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 
 	// Create stub app without base App for background test
 	app := &appStubBG{}
-	done := make(chan struct{})
+	done := StartBackgroundTasks(ctx, app)
 
-	// Start in test wrapper that closes when background exits
-	go func() {
-		StartBackgroundTasks(ctx, app)
-		close(done)
-	}()
-
-	// Let it run a bit to ensure at least one iteration
-	time.Sleep(500 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return app.ocrCalls.Load() > 0 && app.tagCalls.Load() > 0
+	}, time.Second, 10*time.Millisecond)
 	cancel()
 
 	select {
@@ -322,8 +319,69 @@ func TestBackgroundTasks_ShutdownOnContextCancel(t *testing.T) {
 		t.Fatal("background task did not shut down in time")
 	}
 
-	assert.Greater(t, app.ocrCalls, 0, "OCR loop should have run at least once")
-	assert.Greater(t, app.tagCalls, 0, "Tag loop should have run at least once")
+	assert.Greater(t, app.ocrCalls.Load(), int64(0), "OCR loop should have run at least once")
+	assert.Greater(t, app.tagCalls.Load(), int64(0), "Tag loop should have run at least once")
+}
+
+func TestProcessAutoTagDocumentsSkipsMixedCaseOCRQueueTag(t *testing.T) {
+	previousAutoTag := autoTag
+	previousAutoOCRTag := autoOcrTag
+	t.Cleanup(func() {
+		autoTag = previousAutoTag
+		autoOcrTag = previousAutoOCRTag
+	})
+	autoTag = "paperless-gpt-auto"
+	autoOcrTag = "paperless-gpt-ocr-auto"
+
+	env := setupTest(t)
+	defer env.teardown()
+	client := newMockClient(env.client)
+	client.taggedDocuments[autoTag] = []Document{{ID: 77}}
+	client.documents[77] = Document{
+		ID:    77,
+		Title: "OCR queued",
+		Tags:  []string{strings.ToUpper(autoOcrTag)},
+	}
+
+	app := &App{Client: client, Database: env.db}
+	count, err := app.processAutoTagDocuments(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	assert.False(t, client.updateDocsCalled)
+}
+
+func TestProcessAutoOCRSkipsMixedCaseCompleteTag(t *testing.T) {
+	previousAutoOCRTag := autoOcrTag
+	previousCompleteTag := pdfOCRCompleteTag
+	t.Cleanup(func() {
+		autoOcrTag = previousAutoOCRTag
+		pdfOCRCompleteTag = previousCompleteTag
+	})
+	autoOcrTag = "paperless-gpt-ocr-auto"
+	pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+
+	document := Document{
+		ID:    78,
+		Title: "Already complete",
+		Tags: []string{
+			strings.ToUpper(autoOcrTag),
+			strings.ToUpper(pdfOCRCompleteTag),
+		},
+	}
+	client := &recordingClient{
+		taggedDocuments: map[string][]Document{autoOcrTag: {document}},
+	}
+	app := &App{
+		Client:            client,
+		pdfOCRTagging:     true,
+		pdfOCRCompleteTag: pdfOCRCompleteTag,
+	}
+
+	count, err := app.processAutoOcrTagDocuments(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	require.Len(t, client.calls, 1)
+	assert.Equal(t, []string{autoOcrTag}, client.calls[0].RemoveTags)
 }
 
 // TestApp extends App with testing capabilities

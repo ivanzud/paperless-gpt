@@ -1,146 +1,156 @@
-import { useEffect, useState } from 'react';
+import {
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+} from '@heroicons/react/24/outline';
 import axios from 'axios';
+import { useEffect, useState } from 'react';
+import type { SettingsData } from './Settings';
+import Button from './ui/Button';
 
-interface SettingsData {
-  custom_fields_enable: boolean;
-  custom_fields_selected_ids: number[];
-  custom_fields_write_mode: 'append' | 'replace' | 'update';
-  tags_auto_create: boolean;
+interface TagSettingsProps {
+  settings: SettingsData | null;
+  loading: boolean;
+  loadError: string | null;
+  onSettingsSaved: (settings: SettingsData) => void;
 }
 
-export default function TagSettings() {
-  const [settings, setSettings] = useState<SettingsData>({
-    custom_fields_enable: false,
-    custom_fields_selected_ids: [],
-    custom_fields_write_mode: 'append',
-    tags_auto_create: false,
-  });
-  const [initialSettings, setInitialSettings] = useState<SettingsData>(settings);
-  const [loading, setLoading] = useState(true);
+interface SettingsResponse {
+  settings: SettingsData;
+}
+
+export default function TagSettings({
+  settings,
+  loading,
+  loadError,
+  onSettingsSaved,
+}: TagSettingsProps) {
+  const [tagsAutoCreate, setTagsAutoCreate] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [saveError, setSaveError] = useState('');
 
-  // Fetch settings on mount
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const response = await axios.get('./api/settings');
-        const settingsData = response.data.settings as SettingsData;
-        setSettings(settingsData);
-        setInitialSettings(settingsData);
-        setLoading(false);
-      } catch (err) {
-        console.error('Error fetching settings:', err);
-        setError('Failed to load settings');
-        setLoading(false);
-      }
-    };
-    fetchSettings();
-  }, []);
+    if (settings && !dirty) {
+      setTagsAutoCreate(settings.tags_auto_create);
+    }
+  }, [settings, dirty]);
 
-  // Check if settings have changed
-  const hasChanges = JSON.stringify(settings) !== JSON.stringify(initialSettings);
+  const handleToggle = (checked: boolean) => {
+    setTagsAutoCreate(checked);
+    setDirty(checked !== settings?.tags_auto_create);
+    setSuccess('');
+    setSaveError('');
+  };
 
-  // Save settings
   const handleSave = async () => {
+    if (!dirty) return;
+
     setSaving(true);
-    setMessage('');
-    setError('');
-
+    setSuccess('');
+    setSaveError('');
     try {
-      // Only send the field this component manages (partial update)
-      const response = await axios.post('./api/settings', {
-        tags_auto_create: settings.tags_auto_create
+      const response = await axios.post<SettingsResponse>('./api/settings', {
+        tags_auto_create: tagsAutoCreate,
       });
-      setMessage('Settings saved successfully');
-      // Update both settings and initialSettings with the server response
-      const settingsData = response.data.settings as SettingsData;
-      setSettings(settingsData);
-      setInitialSettings(settingsData);
-
-      // Clear message after 3 seconds
-      setTimeout(() => setMessage(''), 3000);
-    } catch (err) {
-      console.error('Error saving settings:', err);
-      setError('Failed to save settings');
+      setTagsAutoCreate(response.data.settings.tags_auto_create);
+      setDirty(false);
+      setSuccess('Tag settings saved.');
+      onSettingsSaved(response.data.settings);
+    } catch (error) {
+      console.error('Error saving tag settings:', error);
+      setSaveError('Could not save tag settings. Try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  // Handle checkbox change
-  const handleToggle = () => {
-    setSettings((prev) => ({
-      ...prev,
-      tags_auto_create: !prev.tags_auto_create,
-    }));
-  };
-
-  if (loading) {
-    return <div className="text-gray-400">Loading settings...</div>;
-  }
-
   return (
-    <div className="p-6 bg-gray-100 dark:bg-gray-900">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-200">Tag Settings</h1>
+    <section
+      aria-labelledby="tag-settings-heading"
+      className="rounded-lg border border-line bg-surface p-6"
+    >
+      <div>
+        <h2 id="tag-settings-heading" className="text-lg font-semibold">
+          Tag suggestions
+        </h2>
+        <p className="mt-1 max-w-prose text-sm text-muted">
+          Control whether reviewed AI suggestions may add tags that do not
+          already exist in paperless-ngx.
+        </p>
       </div>
 
-      <div className="bg-gray-800 p-4 rounded-lg space-y-4">
-        {/* Tag Auto-Creation Toggle */}
-        <div className="flex items-start space-x-3">
-          <input
-            type="checkbox"
-            id="tagsAutoCreate"
-            checked={settings.tags_auto_create}
-            onChange={handleToggle}
-            className="w-4 h-4 mt-1 text-blue-600 bg-gray-700 border-gray-600
-                       rounded focus:ring-blue-500 focus:ring-2"
-          />
-          <div className="flex-1">
-            <label
-              htmlFor="tagsAutoCreate"
-              className="block text-sm font-medium text-gray-200 cursor-pointer"
-            >
-              Automatically create new tags from AI suggestions
-            </label>
-            <p className="text-sm text-gray-400 mt-1">
-              When enabled, tags suggested by the AI that don't exist in Paperless-ngx
-              will be created automatically. When disabled, only existing tags will be used.
+      {loading && (
+        <div className="mt-5 space-y-2" aria-busy="true">
+          <div className="h-5 w-64 animate-pulse rounded bg-surface-2" />
+          <div className="h-4 w-full max-w-xl animate-pulse rounded bg-surface-2" />
+          <span className="sr-only">Loading tag settings…</span>
+        </div>
+      )}
+
+      {loadError && !loading && (
+        <p role="alert" className="mt-4 text-sm text-neg">
+          {loadError}
+        </p>
+      )}
+
+      {settings && !loading && (
+        <>
+          <label className="mt-5 flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={tagsAutoCreate}
+              onChange={(event) => handleToggle(event.target.checked)}
+              className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded accent-primary"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">
+                Automatically create new suggested tags
+              </span>
+              <span className="mt-1 block max-w-prose text-sm text-muted">
+                When disabled, the AI and review workflow use only tags that
+                already exist in paperless-ngx.
+              </span>
+            </span>
+          </label>
+
+          <div className="mt-4 flex items-start gap-2 border-l-2 border-warn bg-warn-tint px-3 py-2 text-xs text-warn">
+            <ExclamationTriangleIcon
+              className="mt-0.5 h-4 w-4 shrink-0"
+              aria-hidden="true"
+            />
+            <p>
+              Enabling this changes the paperless-ngx tag list when you apply
+              a new AI-suggested tag.
             </p>
-            <div className="mt-2 p-2 bg-yellow-900/20 border border-yellow-700/50 rounded">
-              <p className="text-xs text-yellow-400">
-                ⚠️ This will modify your Paperless-ngx tag list.
-                Review auto-created tags in Paperless-ngx settings.
-              </p>
-            </div>
           </div>
-        </div>
 
-        {/* Save Button */}
-        <div className="flex items-center justify-between pt-4 border-t border-gray-700">
-          <div className="flex-1">
-            {message && (
-              <p className="text-sm text-green-400">{message}</p>
-            )}
-            {error && (
-              <p className="text-sm text-red-400">{error}</p>
-            )}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+            <div className="min-h-5 text-sm" aria-live="polite">
+              {success && (
+                <p role="status" className="inline-flex items-center gap-1.5 text-pos">
+                  <CheckCircleIcon className="h-4 w-4" aria-hidden="true" />
+                  {success}
+                </p>
+              )}
+              {saveError && (
+                <p role="alert" className="text-neg">
+                  {saveError}
+                </p>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={handleSave}
+              disabled={!dirty}
+              loading={saving}
+            >
+              {saving ? 'Saving' : 'Save tag settings'}
+            </Button>
           </div>
-          <button
-            onClick={handleSave}
-            disabled={!hasChanges || saving}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-              hasChanges && !saving
-                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-            }`}
-          >
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
-        </div>
-      </div>
-    </div>
+        </>
+      )}
+    </section>
   );
 }

@@ -224,6 +224,25 @@ const SuggestionFields: React.FC<SuggestionFieldsProps> = ({
         />
       </FieldRow>
 
+      <FieldRow
+        suggestion={suggestion}
+        fieldKey="summary"
+        excluded={excluded.has("summary")}
+        onToggleField={onToggleField}
+      >
+        <textarea
+          value={suggestion.suggested_summary || ""}
+          onChange={(e) =>
+            handlers.onSummaryChange(suggestion.id, e.target.value)
+          }
+          disabled={disabled || excluded.has("summary")}
+          aria-label="Suggested summary"
+          placeholder="Document summary"
+          rows={4}
+          className={`${inputClasses} resize-y`}
+        />
+      </FieldRow>
+
       {suggestion.suggested_custom_fields &&
         suggestion.suggested_custom_fields.length > 0 && (
           <div className="py-2.5">

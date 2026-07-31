@@ -61,6 +61,7 @@ jobs:
       - name: Checkout PR code
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           # The exact commit the maintainer saw when approving — not a merge
           # commit that could drift as main moves.
           ref: ${{ github.event.pull_request.head.sha }}

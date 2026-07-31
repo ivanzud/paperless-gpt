@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"paperless-gpt/internal/textsanitize"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -103,11 +102,9 @@ func (app *App) getSuggestedTags(
 	templateMutex.RLock()
 	defer templateMutex.RUnlock()
 
-	// Remove all paperless-gpt related tags from available tags
-	availableTags = removeTagFromList(availableTags, manualTag)
-	availableTags = removeTagFromList(availableTags, autoTag)
-	availableTags = removeTagFromList(availableTags, autoOcrTag)
-	availableTags = removeTagFromList(availableTags, pdfOCRCompleteTag)
+	// Workflow tags control processing state and must never be LLM suggestions.
+	availableTags = filterProtectedWorkflowTags(availableTags)
+	originalTags = filterProtectedWorkflowTags(originalTags)
 	allowNewTags := tagsAutoCreateEnabled()
 
 	// Get available tokens for content
@@ -168,9 +165,8 @@ func (app *App) getSuggestedTags(
 
 	// append the original tags to the suggested tags
 	suggestedTags = append(suggestedTags, originalTags...)
-	// Remove duplicates
-	slices.Sort(suggestedTags)
-	suggestedTags = slices.Compact(suggestedTags)
+	suggestedTags = filterProtectedWorkflowTags(suggestedTags)
+	suggestedTags = compactTagNamesCaseInsensitive(suggestedTags)
 
 	// Filter out tags that are not in the available tags list unless new-tag creation is enabled.
 	if allowNewTags {
@@ -621,7 +617,7 @@ func (app *App) prepareSuggestionGenerationContext(ctx context.Context, suggesti
 		}
 		generationContext.availableTagNames = make([]string, 0, len(availableTagsMap))
 		for tagName := range availableTagsMap {
-			if tagName == manualTag {
+			if tagName == "" || isProtectedWorkflowTag(tagName) {
 				continue
 			}
 			generationContext.availableTagNames = append(generationContext.availableTagNames, tagName)
@@ -760,7 +756,7 @@ func (app *App) generateSingleDocumentSuggestion(ctx context.Context, suggestion
 		docLogger.Printf("Suggested tags for document %d: %v", documentID, suggestedTags)
 		suggestion.SuggestedTags = suggestedTags
 	} else {
-		suggestion.SuggestedTags = doc.Tags
+		suggestion.SuggestedTags = filterProtectedWorkflowTags(doc.Tags)
 	}
 
 	// Correspondents

@@ -1,6 +1,7 @@
 // UndoCard.tsx
 import React from 'react';
 import { Tooltip } from 'react-tooltip';
+import Button from './ui/Button';
 
 interface ModificationProps {
   ID: number;
@@ -34,6 +35,20 @@ const buildPaperlessUrl = (paperlessUrl: string, documentId: number): string => 
   return `${paperlessUrl}/documents/${documentId}/details`;
 };
 
+const shouldWrapValue = (field: string): boolean => {
+  return field.toLowerCase() === 'tags' || field.toLowerCase() === 'summary';
+};
+
+const valueLayoutClass = (field: string): string => {
+  if (field.toLowerCase() === 'tags') {
+    return 'break-all whitespace-normal [overflow-wrap:anywhere]';
+  }
+  if (field.toLowerCase() === 'summary') {
+    return 'break-words whitespace-pre-wrap [overflow-wrap:anywhere]';
+  }
+  return 'truncate overflow-hidden whitespace-nowrap';
+};
+
 const UndoCard: React.FC<ModificationProps> = ({
   ID,
   DocumentID,
@@ -51,11 +66,11 @@ const UndoCard: React.FC<ModificationProps> = ({
       try {
         const tags = JSON.parse(value) as string[];
         return (
-          <div className="flex flex-wrap gap-1">
+          <div className="flex min-w-0 flex-wrap gap-1">
             {tags.map((tag) => (
               <span
                 key={tag}
-                className="bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs font-medium px-2.5 py-0.5 rounded-full"
+                className="max-w-full break-all rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
               >
                 {tag}
               </span>
@@ -72,24 +87,24 @@ const UndoCard: React.FC<ModificationProps> = ({
   };
 
   return (
-    <div className="undo-card relative bg-white dark:bg-gray-800 p-4 rounded-md shadow-md">
-      <div className="grid grid-cols-6">
-        <div className="col-span-5"> {/* Left content */}
-          <div className="grid grid-cols-3 gap-4 mb-4">
-            <div className="">
+    <article className="undo-card relative min-w-0 rounded-md border border-line bg-surface p-4 shadow-card">
+      <div className="flex min-w-0 flex-col gap-4 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
+        <div className="undo-card__content min-w-0">
+          <div className="undo-card__metadata mb-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+            <div className="min-w-0">
               <div className="text-xs uppercase text-gray-500 dark:text-gray-400 font-semibold mb-1">
                 Date Modified
               </div>
-              <div className="text-sm text-gray-700 dark:text-gray-300">
+              <div className="break-words text-sm text-gray-700 dark:text-gray-300">
                 {DateChanged && formatDate(DateChanged)}
               </div>
             </div>
-            <div className="">
+            <div className="min-w-0">
               <a
                 href={buildPaperlessUrl(paperlessUrl, DocumentID)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300"
+                className="block min-w-0 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300"
               >
                 <div className="text-xs uppercase text-gray-500 dark:text-gray-400 font-semibold mb-1">
                   Document ID
@@ -100,35 +115,35 @@ const UndoCard: React.FC<ModificationProps> = ({
               </a>
             </div>
 
-            <div className="">
+            <div className="min-w-0">
               <div className="text-xs uppercase text-gray-500 dark:text-gray-400 font-semibold mb-1">
                 Modified Field
               </div>
-              <div className="text-sm text-gray-700 dark:text-gray-300">
+              <div className="break-words text-sm text-gray-700 dark:text-gray-300">
                 {ModField}
               </div>
             </div>
           </div>
-          <div className="mt-3">
-            <div className="mt-2 space-y-2">
-              <div className={`text-sm flex flex-nowrap ${Undone ? 'line-through' : ''}`}>
-                <span className="text-red-500 dark:text-red-400">Previous: &nbsp;</span>
+          <div className="undo-card__values min-w-0">
+            <div className="space-y-2">
+              <div className={`grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-1 text-sm ${Undone ? 'line-through' : ''}`}>
+                <span className="text-red-500 dark:text-red-400">Previous:</span>
                 <span
-                  className="text-gray-600 dark:text-gray-300 truncate overflow-hidden flex-shrink-0 whitespace-nowrap flex-1 max-w-full group relative"
-                  { // Add tooltip if value is too long and not tags
-                    ...(ModField !== 'tags' && PreviousValue.length > 100 ? {
+                  className={`group relative min-w-0 max-w-full text-gray-600 dark:text-gray-300 ${valueLayoutClass(ModField)}`}
+                  { // Add a tooltip when a single-line value is too long.
+                    ...(!shouldWrapValue(ModField) && PreviousValue.length > 100 ? {
                     'data-tooltip-id': `tooltip-${ID}-prev`
                   } : {})}
                 >
                   {formatValue(PreviousValue, ModField)}
                 </span>
               </div>
-              <div className={`text-sm flex flex-nowrap ${Undone ? 'line-through' : ''}`}>
-                <span className="text-green-500 dark:text-green-400">New: &nbsp;</span>
+              <div className={`grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-1 text-sm ${Undone ? 'line-through' : ''}`}>
+                <span className="text-green-500 dark:text-green-400">New:</span>
                 <span
-                  className="text-gray-600 dark:text-gray-300 truncate overflow-hidden flex-shrink-0 whitespace-nowrap flex-1 max-w-full group relative"
-                  { // Add tooltip if value is too long and not tags
-                    ...(ModField !== 'tags' && NewValue.length > 100 ? {
+                  className={`group relative min-w-0 max-w-full text-gray-600 dark:text-gray-300 ${valueLayoutClass(ModField)}`}
+                  { // Add a tooltip when a single-line value is too long.
+                    ...(!shouldWrapValue(ModField) && NewValue.length > 100 ? {
                     'data-tooltip-id': `tooltip-${ID}-new`
                   } : {})}
                 >
@@ -166,27 +181,27 @@ const UndoCard: React.FC<ModificationProps> = ({
             </Tooltip>
           </div>
         </div>
-        <div className="grid place-items-center"> {/* Button content */}
-          <button
+        <div className="undo-card__action flex min-w-0 items-stretch border-t border-line pt-4 sm:items-center sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+          <Button
+            type="button"
             onClick={() => onUndo(ID)}
             disabled={Undone}
-            className={`mt-2 mb-2 p-4 text-sm font-medium rounded-md min-w-[100px] max-w-[150px] text-center break-words ${Undone
-              ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
-              : 'bg-blue-500 dark:bg-blue-600 text-white hover:bg-blue-600 dark:hover:bg-blue-700'
-              } transition-colors duration-200`}
+            variant={Undone ? 'secondary' : 'primary'}
+            className="h-auto min-h-9 w-full break-words py-2 text-center sm:w-40"
+            aria-label={Undone ? `Undone on ${formatDate(UndoneDate)}` : `Undo ${ModField} change for document ${DocumentID}`}
           >
             {Undone ? (
-              <>
+              <span className="flex min-w-0 flex-col items-center leading-tight">
                 <span className="block text-xs">Undone on</span>
                 <span className="block text-xs">{formatDate(UndoneDate)}</span>
-              </>
+              </span>
             ) : (
               'Undo'
             )}
-          </button>
+          </Button>
         </div>
       </div>
-    </div>
+    </article>
   );
 };
 

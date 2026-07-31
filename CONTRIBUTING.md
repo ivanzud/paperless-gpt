@@ -168,7 +168,7 @@ The application should now be accessible at `http://localhost:8080`.
 - **Backend Tests**:
 
   - Write unit tests using Go's `testing` and `github.com/stretchr/testify/assert` packages.
-  - Run tests with `go test ./...`.
+  - Run tests with `./scripts/ci/test-go-packages.sh`. This selects only repository-owned packages, so results do not change after frontend dependencies are installed.
 
 - **Frontend Tests**:
 

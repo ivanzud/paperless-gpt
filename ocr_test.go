@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,6 +132,32 @@ func TestProcessDocumentOCR_SafetyFeature(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestProcessDocumentOCRRecognizesMixedCaseCompleteTag(t *testing.T) {
+	const documentID = 124
+	completeTag := "paperless-gpt-ocr-complete"
+	client := newMockClient(&PaperlessClient{})
+	client.documents[documentID] = Document{
+		ID:      documentID,
+		Content: "Existing OCR",
+		Tags:    []string{strings.ToUpper(completeTag)},
+	}
+	app := &App{
+		Client:             client,
+		pdfOCRTagging:      true,
+		pdfOCRCompleteTag:  completeTag,
+		pdfSkipExistingOCR: true,
+	}
+
+	result, err := app.ProcessDocumentOCR(
+		context.Background(),
+		documentID,
+		OCROptions{ProcessMode: "pdf", PromptOverride: "OCR"},
+		"",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "Existing OCR", result.Text)
 }
 
 func TestUploadProcessedPDF(t *testing.T) {

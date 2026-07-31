@@ -125,4 +125,5 @@ var envRegistry = []EnvVar{
 	{Name: "VISION_LLM_REQUESTS_PER_MINUTE", Category: "OCR", Secret: false, Default: "120", Description: "Maximum requests per minute for the Vision LLM. Useful for managing API costs or local LLM load."},
 	{Name: "VISION_LLM_TEMPERATURE", Category: "OCR", Secret: false, Default: "", Description: "Sampling temperature for Vision OCR generation. Lower is more deterministic. Important: For OpenAI GPT-5 it must be explicitly set to `1.0`."},
 	{Name: "VISION_OLLAMA_HOST", Category: "OCR", Secret: false, Default: "", Description: "Ollama server URL used by the vision OCR model; falls back to `VISION_LLM_HOST` and then `OLLAMA_HOST`."},
+	{Name: "VISION_OLLAMA_THINK", Category: "OCR", Secret: false, Default: "", Description: "(Ollama vision OCR only) Override `OLLAMA_THINK` for the vision model. Set to `false` to disable reasoning or `true` to enable it; when unset, the vision model inherits `OLLAMA_THINK` and then the model default."},
 }

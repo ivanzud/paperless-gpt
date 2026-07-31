@@ -42,7 +42,7 @@ const Modal: React.FC<ModalProps> = ({
       <DialogPanel
         transition
         className={classNames(
-          "flex max-h-full flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-raised",
+          "modal-panel flex max-h-full flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-raised",
           "duration-200 ease-out-quart data-[closed]:scale-[0.98] data-[closed]:opacity-0",
           sizeClasses[size]
         )}

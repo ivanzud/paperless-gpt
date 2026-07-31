@@ -59,11 +59,11 @@ type GetDocumentApiResponseResult struct {
 	// Modified            time.Time     `json:"modified"`
 	// Added               time.Time     `json:"added"`
 	// ArchiveSerialNumber interface{}   `json:"archive_serial_number"`
-	// OriginalFileName    string        `json:"original_file_name"`
+	OriginalFileName string `json:"original_file_name"`
 	// ArchivedFileName    string        `json:"archived_file_name"`
 	Owner       int                 `json:"owner"`
 	Permissions DocumentPermissions `json:"permissions"`
-	Notes       []interface{}       `json:"notes"`
+	Notes       []DocumentNote      `json:"notes"`
 	// SearchHit struct {
 	// 	Score          float64 `json:"score"`
 	// 	Highlights     string  `json:"highlights"`
@@ -86,6 +86,11 @@ type CustomFieldSuggestion struct {
 	Value interface{} `json:"value"`
 }
 
+type DocumentNote struct {
+	ID   int    `json:"id"`
+	Note string `json:"note"`
+}
+
 // GetDocumentApiResponse is the response payload for /documents/{id} endpoint.
 // But we are only interested in a subset of the fields.
 type GetDocumentApiResponse struct {
@@ -99,7 +104,7 @@ type GetDocumentApiResponse struct {
 	OriginalFileName string                `json:"original_file_name"`
 	Owner            int                   `json:"owner"`
 	Permissions      DocumentPermissions   `json:"permissions"`
-	Notes            []interface{}         `json:"notes"`
+	Notes            []DocumentNote        `json:"notes"`
 	CustomFields     []CustomFieldResponse `json:"custom_fields"`
 }
 
@@ -220,19 +225,17 @@ type OCROptions struct {
 	PromptOverride  string // Run-scoped OCR prompt template; empty = use the saved template
 }
 
-// PartialUpdateError signals that a document update succeeded only after
-// paperless-gpt had to drop one or more fields that paperless-ngx rejected as
-// invalid. The PATCH eventually succeeded with the surviving fields; the
-// document has been written but is incomplete relative to what the LLM
-// suggested. Callers should treat this as a successful update but apply the
-// fail tag so the user knows the document needs review.
+// PartialUpdateError signals that some requested changes were applied while
+// others were rejected or failed in a later API operation. Callers should
+// treat this as a successful update but apply the fail tag so the user knows
+// the document needs review.
 type PartialUpdateError struct {
 	DocumentID    int
 	DroppedFields []string
 }
 
 func (e *PartialUpdateError) Error() string {
-	return fmt.Sprintf("document %d updated with %d field(s) dropped due to paperless-ngx validation errors: %v", e.DocumentID, len(e.DroppedFields), e.DroppedFields)
+	return fmt.Sprintf("document %d updated partially; %d requested field(s) were not applied: %v", e.DocumentID, len(e.DroppedFields), e.DroppedFields)
 }
 
 // ClientInterface defines the interface for PaperlessClient operations
@@ -249,6 +252,8 @@ type ClientInterface interface {
 	GetAllDocumentTypes(ctx context.Context) ([]DocumentType, error)
 	GetCustomFields(ctx context.Context) ([]CustomField, error)
 	CreateTag(ctx context.Context, tagName string, objPerms *ObjPermissions) (int, error)
+	CreateDocumentNote(ctx context.Context, documentID int, note string) (DocumentNote, error)
+	DeleteDocumentNote(ctx context.Context, documentID int, noteID int) error
 	DownloadDocumentAsImages(ctx context.Context, documentID int, pageLimit int) ([]string, int, error)
 	DownloadDocumentAsPDF(ctx context.Context, documentID int, limitPages int, split bool) ([]string, []byte, int, error)
 	UploadDocument(ctx context.Context, data []byte, filename string, metadata map[string]interface{}) (string, error)
