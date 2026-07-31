@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -655,7 +656,10 @@ func TestUpdateDocuments_DropsInvalidCreatedDateBeforePatch(t *testing.T) {
 	})
 
 	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
-	require.NoError(t, err)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, 1, partial.DocumentID)
+	assert.Equal(t, []string{"created_date"}, partial.DroppedFields)
 }
 
 func TestUpdateDocuments_StripsRejectedCustomFieldAndRetries(t *testing.T) {
@@ -716,7 +720,9 @@ func TestUpdateDocuments_StripsRejectedCustomFieldAndRetries(t *testing.T) {
 	})
 
 	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
-	require.NoError(t, err)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, []string{"custom_fields[1](field_id=88)"}, partial.DroppedFields)
 	assert.Equal(t, 2, patchCalls)
 }
 

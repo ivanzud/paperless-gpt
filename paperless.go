@@ -762,6 +762,32 @@ func (client *PaperlessClient) DownloadPDF(ctx context.Context, document Documen
 	return io.ReadAll(resp.Body)
 }
 
+// GetDocumentThumbnail fetches the rendered thumbnail image for a document.
+func (client *PaperlessClient) GetDocumentThumbnail(ctx context.Context, documentID int) ([]byte, string, error) {
+	path := fmt.Sprintf("api/documents/%d/thumb/", documentID)
+	resp, err := client.Do(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("error fetching thumbnail for document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	return data, contentType, nil
+}
+
 func (client *PaperlessClient) GetDocument(ctx context.Context, documentID int) (Document, error) {
 	// TODO: This function can be optimized by caching the results of GetAllTags, GetAllCorrespondents, and GetCustomFields.
 	// A simple time-based cache could be implemented in the PaperlessClient to avoid fetching this data on every call.
@@ -893,6 +919,8 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 		break
 	}
+
+	var firstPartial *PartialUpdateError
 
 	for _, document := range documents {
 		documentID := document.ID
@@ -1121,6 +1149,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 		if len(partialDroppedFields) > 0 {
 			log.Warnf("Document %d updated partially after dropping invalid fields: %v", documentID, partialDroppedFields)
+			if firstPartial == nil {
+				firstPartial = &PartialUpdateError{
+					DocumentID:    documentID,
+					DroppedFields: append([]string(nil), partialDroppedFields...),
+				}
+			}
 		}
 
 		// Check if we need to remove auto/manual tags in a separate update
@@ -1208,6 +1242,9 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			}
 		}
 		log.Printf("Document %d updated successfully.", documentID)
+	}
+	if firstPartial != nil {
+		return firstPartial
 	}
 	return nil
 }
@@ -1827,6 +1864,27 @@ func (client *PaperlessClient) CreateTag(ctx context.Context, tagName string, ob
 	}
 
 	return createdTag.ID, nil
+}
+
+// EnsureTagExists creates an internal marker tag when it is not already present.
+func (client *PaperlessClient) EnsureTagExists(ctx context.Context, tagName string) error {
+	if tagName == "" {
+		return nil
+	}
+
+	tags, err := client.GetAllTags(ctx)
+	if err != nil {
+		return fmt.Errorf("error fetching tags: %w", err)
+	}
+	if _, exists := tags[tagName]; exists {
+		return nil
+	}
+
+	objPerms := client.getPermissionsOrWarn(ctx, nil, "Could not resolve permissions for internal tag %q", tagName)
+	if _, err := client.CreateTag(ctx, tagName, objPerms); err != nil {
+		return fmt.Errorf("error creating tag %q: %w", tagName, err)
+	}
+	return nil
 }
 
 // UploadDocument uploads a document to paperless-ngx

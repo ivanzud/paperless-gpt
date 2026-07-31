@@ -74,12 +74,10 @@ const AdhocAnalysis: React.FC = () => {
       });
       setAnalysisResult(res.data.result);
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
+      if (axios.isAxiosError<{ error?: string }>(err)) {
         setError(err.response?.data?.error || err.message || 'An unknown error occurred.');
-      } else if (err instanceof Error) {
-        setError(err.message || 'An unknown error occurred.');
       } else {
-        setError('An unknown error occurred.');
+        setError(err instanceof Error ? err.message : 'An unknown error occurred.');
       }
     } finally {
       setProcessing(false);
@@ -104,15 +102,13 @@ const AdhocAnalysis: React.FC = () => {
           <NoDocuments
             filterTag={filterTag}
             onReload={fetchDocuments}
-            processing={processing}
+            reloading={processing}
           />
         ) : (
           <DocumentsToProcess
             documents={documents}
             selectedDocuments={selectedDocuments}
             onSelectDocument={handleSelectDocument}
-            gridCols="3"
-            onReload={fetchDocuments}
           />
         )}
       </div>

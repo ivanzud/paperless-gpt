@@ -39,7 +39,15 @@ func (c *wholePDFFallbackClient) GetDocument(ctx context.Context, documentID int
 	return Document{ID: documentID}, nil
 }
 
-func (c *wholePDFFallbackClient) GetSimilarDocuments(ctx context.Context, documentID int, count int) ([]Document, error) {
+func (c *wholePDFFallbackClient) GetDocumentThumbnail(ctx context.Context, documentID int) ([]byte, string, error) {
+	return nil, "", nil
+}
+
+func (c *wholePDFFallbackClient) SearchDocuments(ctx context.Context, query string, pageSize int) ([]Document, error) {
+	return nil, nil
+}
+
+func (c *wholePDFFallbackClient) GetDocumentPageImage(ctx context.Context, documentID int, pageIndex int) ([]byte, error) {
 	return nil, nil
 }
 

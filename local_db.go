@@ -28,6 +28,7 @@ type ModificationHistory struct {
 type OCRPageResult struct {
 	ID             uint   `gorm:"primaryKey"`
 	DocumentID     int    `gorm:"index;not null"`
+	JobID          string `gorm:"index;size:64"` // OCR run this page belongs to ("" on pre-run legacy rows)
 	PageIndex      int    `gorm:"not null"`
 	Text           string `gorm:"size:1048576"`
 	OcrLimitHit    bool
@@ -60,7 +61,7 @@ func InitializeDB() *gorm.DB {
 	}
 
 	// Migrate the schema (create the tables if they don't exist)
-	err = db.AutoMigrate(&ModificationHistory{}, &OCRPageResult{})
+	err = db.AutoMigrate(&ModificationHistory{}, &OCRPageResult{}, &OCRRun{})
 	if err != nil {
 		log.Fatalf("Failed to migrate database schema: %v", err)
 	}
@@ -78,7 +79,7 @@ func InsertModification(db *gorm.DB, record *ModificationHistory) error {
 	return result.Error
 }
 
-// GetModification retrieves a modification record by its ID.
+// GetModification retrieves a modification record by its ID
 func GetModification(db *gorm.DB, id int) (*ModificationHistory, error) {
 	var record ModificationHistory
 	result := db.First(&record, id) // GORM's First method retrieves the first record matching the ID
@@ -122,17 +123,20 @@ func SetModificationUndone(db *gorm.DB, record *ModificationHistory) error {
 	return result.Error
 }
 
-// SaveSingleOcrPageResult saves or updates the OCR result for a single page, including GenerationInfo as JSON
-func SaveSingleOcrPageResult(db *gorm.DB, docID int, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
-	return SaveSingleOcrPageResultWithContext(context.Background(), db, docID, pageIdx, text, ocrLimitHit, generationInfoJSON)
+// SaveSingleOcrPageResult saves or updates the OCR result for a single page of
+// one run, including GenerationInfo as JSON.
+func SaveSingleOcrPageResult(db *gorm.DB, docID int, jobID string, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
+	return SaveSingleOcrPageResultWithContext(context.Background(), db, docID, jobID, pageIdx, text, ocrLimitHit, generationInfoJSON)
 }
 
-// SaveSingleOcrPageResultWithContext saves or updates the OCR result for a single page with context propagation.
-func SaveSingleOcrPageResultWithContext(ctx context.Context, db *gorm.DB, docID int, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
+// SaveSingleOcrPageResultWithContext persists a page without outliving its OCR request.
+func SaveSingleOcrPageResultWithContext(ctx context.Context, db *gorm.DB, docID int, jobID string, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
+	if db == nil {
+		return nil
+	}
 	db = db.WithContext(ctx)
-
 	var result OCRPageResult
-	tx := db.Where("document_id = ? AND page_index = ?", docID, pageIdx).First(&result)
+	tx := db.Where("document_id = ? AND job_id = ? AND page_index = ?", docID, jobID, pageIdx).First(&result)
 	if tx.Error == nil {
 		result.Text = text
 		result.OcrLimitHit = ocrLimitHit
@@ -143,6 +147,7 @@ func SaveSingleOcrPageResultWithContext(ctx context.Context, db *gorm.DB, docID 
 		if errors.Is(tx.Error, gorm.ErrRecordNotFound) {
 			result = OCRPageResult{
 				DocumentID:     docID,
+				JobID:          jobID,
 				PageIndex:      pageIdx,
 				Text:           text,
 				OcrLimitHit:    ocrLimitHit,
@@ -157,16 +162,17 @@ func SaveSingleOcrPageResultWithContext(ctx context.Context, db *gorm.DB, docID 
 	return nil
 }
 
-func GetOcrPageResults(db *gorm.DB, docID int) ([]OCRPageResult, error) {
+// GetOcrPageResults returns the stored pages of one run. An empty jobID means
+// "the latest run that has pages" (which also covers legacy rows).
+func GetOcrPageResults(db *gorm.DB, docID int, jobID string) ([]OCRPageResult, error) {
+	if jobID == "" {
+		jobID = LatestOCRRunJobID(db, docID)
+	}
 	var results []OCRPageResult
-	tx := db.Where("document_id = ?", docID).Order("page_index ASC").Find(&results)
+	tx := db.Where("document_id = ? AND job_id = ?", docID, jobID).Order("page_index ASC").Find(&results)
 	return results, tx.Error
 }
 
-func UpdateOcrPageResult(db *gorm.DB, docID int, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
-	return SaveSingleOcrPageResult(db, docID, pageIdx, text, ocrLimitHit, generationInfoJSON)
-}
-
-func DeleteOcrPageResults(db *gorm.DB, docID int) error {
-	return db.Where("document_id = ?", docID).Delete(&OCRPageResult{}).Error
+func UpdateOcrPageResult(db *gorm.DB, docID int, jobID string, pageIdx int, text string, ocrLimitHit bool, generationInfoJSON string) error {
+	return SaveSingleOcrPageResult(db, docID, jobID, pageIdx, text, ocrLimitHit, generationInfoJSON)
 }

@@ -51,8 +51,9 @@ var (
 	openaiAPIKey                  = os.Getenv("OPENAI_API_KEY")
 	manualTag                     = os.Getenv("MANUAL_TAG")
 	autoTag                       = os.Getenv("AUTO_TAG")
-	manualOcrTag                  = os.Getenv("MANUAL_OCR_TAG") // Not used yet
+	autoTagComplete               string // read via os.LookupEnv in validateOrDefaultEnvVars
 	autoOcrTag                    = os.Getenv("AUTO_OCR_TAG")
+	failTag                       = os.Getenv("FAIL_TAG")
 	ocrProcessMode                = os.Getenv("OCR_PROCESS_MODE")
 	ocrSkipFailedPages            = strings.ToLower(os.Getenv("OCR_SKIP_FAILED_PAGES")) == "true"
 	ocrSkipFailedDocuments        = strings.ToLower(os.Getenv("OCR_SKIP_FAILED_DOCUMENTS")) == "true"
@@ -74,6 +75,7 @@ var (
 	ollamaThink                   = parseOptionalBoolEnv("OLLAMA_THINK")
 	visionOllamaThink             = parseOptionalBoolEnv("VISION_OLLAMA_THINK")
 	limitOcrPages                 int // Will be read from OCR_LIMIT_PAGES
+	ocrMaxRetries                 int // Will be read from OCR_MAX_RETRIES
 	tokenLimit                    = 0 // Will be read from TOKEN_LIMIT
 	imageMaxPixelDimension        int // Will be read from IMAGE_MAX_PIXEL_DIMENSION
 	imageMaxTotalPixels           int // Will be read from IMAGE_MAX_TOTAL_PIXELS
@@ -104,6 +106,7 @@ var (
 	customFieldTemplate   *template.Template
 	summaryTemplate       *template.Template
 	ocrTemplate           *template.Template
+	adhocAnalysisTemplate *template.Template
 	templateMutex         sync.RWMutex
 
 	// Server-side settings
@@ -146,6 +149,9 @@ type App struct {
 	pdfOCRCompleteTag  string            // Tag to add to documents that have been OCR processed
 	pdfOCRTagging      bool              // Whether to add the OCR complete tag to processed PDFs
 	pdfSkipExistingOCR bool              // Whether to skip processing PDFs that already have OCR detected
+	autoTagComplete    string            // Tag to add to documents after auto-processing is complete
+	ocrProviderLabel   string            // Human-readable provider description for run records ("llm (ollama/minicpm-v)")
+	ocrFailures        ocrFailureTracker // Per-document OCR failure counts for the auto-OCR poll
 	backgroundOCRMu    sync.Mutex
 	backgroundOCRFails map[int]int
 }
@@ -173,11 +179,23 @@ func main() {
 		log.Warn("Custom fields are enabled, but no custom fields are selected in the settings.")
 	}
 
+	// UI-saved OCR defaults shadow env values; say so where operators look.
+	logOCRSettingsOverrides()
+
 	// Print version
 	printVersion()
 
 	// Initialize PaperlessClient
 	client := NewPaperlessClient(paperlessBaseURL, paperlessAPIToken)
+
+	// Ensure the fail tag exists in paperless-ngx. paperless-gpt applies this
+	// tag mechanically when document processing fails (see processAutoTagDocuments),
+	// so it must be available regardless of the CREATE_NEW_TAGS setting.
+	// A failure here is logged but non-fatal: the loop-break path still removes
+	// the auto tag, the fail tag is just not applied.
+	if err := client.EnsureTagExists(ctx, failTag); err != nil {
+		log.Warnf("Failed to ensure fail tag %q exists: %v. Recovery from a failed document update will still remove the auto tag (loop break works), but the fail tag will not be added.", failTag, err)
+	}
 
 	// Initial fetch of custom fields
 	refreshCustomFieldsCache(client)
@@ -198,6 +216,9 @@ func main() {
 
 	// Initialize Database
 	database := InitializeDB()
+	if err := MarkInterruptedOCRRuns(database); err != nil {
+		log.Warnf("Failed to mark interrupted OCR runs: %v", err)
+	}
 
 	// Load Templates
 	if err := loadTemplates(); err != nil {
@@ -357,11 +378,12 @@ func main() {
 		pdfOCRCompleteTag:  pdfOCRCompleteTag,
 		pdfOCRTagging:      pdfOCRTagging,
 		pdfSkipExistingOCR: pdfSkipExistingOCR,
+		autoTagComplete:    autoTagComplete,
+		ocrProviderLabel:   ocrProviderLabel(),
 		backgroundOCRFails: make(map[int]int),
 	}
 
 	if app.isOcrEnabled() {
-		fmt.Printf("Using %s as manual OCR tag\n", manualOcrTag)
 		fmt.Printf("Using %s as auto OCR tag\n", autoOcrTag)
 		rawLimitOcrPages := os.Getenv("OCR_LIMIT_PAGES")
 		if rawLimitOcrPages == "" {
@@ -371,6 +393,22 @@ func main() {
 			limitOcrPages, err = strconv.Atoi(rawLimitOcrPages)
 			if err != nil {
 				log.Fatalf("Invalid OCR_LIMIT_PAGES value: %v", err)
+			}
+		}
+		rawOcrMaxRetries := os.Getenv("OCR_MAX_RETRIES")
+		if rawOcrMaxRetries == "" {
+			rawOcrMaxRetries = os.Getenv("BACKGROUND_DOCUMENT_MAX_FAILURES")
+			if rawOcrMaxRetries != "" {
+				log.Warn("BACKGROUND_DOCUMENT_MAX_FAILURES is deprecated; use OCR_MAX_RETRIES")
+			}
+		}
+		if rawOcrMaxRetries == "" {
+			ocrMaxRetries = 3
+		} else {
+			var err error
+			ocrMaxRetries, err = strconv.Atoi(rawOcrMaxRetries)
+			if err != nil || ocrMaxRetries < 0 {
+				log.Fatalf("Invalid OCR_MAX_RETRIES value: %q (must be a non-negative integer, 0 disables the limit)", rawOcrMaxRetries)
 			}
 		}
 	}
@@ -387,7 +425,12 @@ func main() {
 		api.GET("/documents", app.documentsHandler)
 		// http://localhost:8080/api/documents/544
 		api.GET("/documents/:id", app.getDocumentHandler())
+		api.GET("/documents/:id/thumb", app.getDocumentThumbnailHandler)
 		api.POST("/generate-suggestions", app.generateSuggestionsHandler)
+		api.POST("/jobs/suggestions", app.submitSuggestionJobHandler)
+		api.GET("/jobs/suggestions/:job_id", app.getSuggestionJobStatusHandler)
+		api.GET("/jobs/suggestions", app.getAllSuggestionJobsHandler)
+		api.POST("/jobs/suggestions/:job_id/stop", app.stopSuggestionJobHandler)
 		api.PATCH("/update-documents", app.updateDocumentsHandler)
 		api.GET("/filter-tag", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"tag": manualTag})
@@ -407,6 +450,13 @@ func main() {
 		api.DELETE("/documents/:id/ocr_pages/:pageIndex/reocr", app.cancelReOCRPageHandler)
 		api.GET("/jobs/ocr/:job_id", app.getJobStatusHandler)
 		api.GET("/jobs/ocr", app.getAllJobsHandler)
+		api.GET("/ocr/runs", app.listOCRRunsHandler)
+		api.GET("/ocr/config", app.getOCRConfigHandler)
+		api.GET("/config", app.getConfigHandler)
+		api.PUT("/ocr/defaults", app.updateOCRDefaultsHandler)
+		api.DELETE("/ocr/defaults", app.resetOCRDefaultsHandler)
+		api.GET("/search-documents", app.searchDocumentsHandler)
+		api.GET("/documents/:id/pages/:pageIndex/image", app.getDocumentPageImageHandler)
 		api.POST("/ocr/jobs/:job_id/stop", app.stopOCRJobHandler)
 
 		// Endpoint to see if user enabled OCR
@@ -448,6 +498,9 @@ func main() {
 		router.GET("/experimental-ocr", func(c *gin.Context) {
 			c.File("web-app/dist/index.html")
 		})
+		router.GET("/ocr", func(c *gin.Context) {
+			c.File("web-app/dist/index.html")
+		})
 		router.GET("/settings", func(c *gin.Context) {
 			c.File("web-app/dist/index.html")
 		})
@@ -479,6 +532,11 @@ func main() {
 		router.GET("/experimental-ocr", func(c *gin.Context) {
 			serveEmbeddedFile(c, "", "index.html")
 		})
+		// ocr route (tabs use a query param; nested paths would break the
+		// relative asset base needed for reverse-proxy prefixes)
+		router.GET("/ocr", func(c *gin.Context) {
+			serveEmbeddedFile(c, "", "index.html")
+		})
 		// settings route
 		router.GET("/settings", func(c *gin.Context) {
 			serveEmbeddedFile(c, "", "index.html")
@@ -492,6 +550,7 @@ func main() {
 	// Start OCR worker pool
 	numWorkers := 1 // Number of workers to start
 	startWorkerPool(app, numWorkers)
+	startSuggestionWorkerPool(app, suggestionWorkerCount())
 
 	if listenInterface == "" {
 		listenInterface = ":8080"
@@ -551,6 +610,33 @@ func (app *App) isOcrEnabled() bool {
 	return app.ocrProvider != nil
 }
 
+// ocrProviderLabel composes a human-readable description of the configured
+// OCR provider for run records and the config endpoint.
+func ocrProviderLabel() string {
+	provider := os.Getenv("OCR_PROVIDER")
+	if provider == "" {
+		provider = "llm"
+	}
+	switch provider {
+	case "llm":
+		if visionLlmProvider != "" {
+			if visionLlmModel != "" {
+				return fmt.Sprintf("llm (%s/%s)", visionLlmProvider, visionLlmModel)
+			}
+			return fmt.Sprintf("llm (%s)", visionLlmProvider)
+		}
+		return "llm"
+	case "mistral_ocr":
+		model := os.Getenv("MISTRAL_MODEL")
+		if model == "" {
+			model = "mistral-ocr-latest"
+		}
+		return fmt.Sprintf("mistral_ocr (%s)", model)
+	default:
+		return provider
+	}
+}
+
 // validateOCRProviderModeCompatibility validates that the OCR provider supports the specified processing mode
 func validateOCRProviderModeCompatibility(provider, mode, visionProvider string) error {
 	// Define which providers support which modes
@@ -596,16 +682,34 @@ func validateOrDefaultEnvVars() {
 	}
 	fmt.Printf("Using %s as auto tag\n", autoTag)
 
-	if manualOcrTag == "" {
-		manualOcrTag = "paperless-gpt-ocr"
-	}
-
 	if autoOcrTag == "" {
 		autoOcrTag = "paperless-gpt-ocr-auto"
 	}
 
+	if failTag == "" {
+		if ocrFailedTag != "" {
+			failTag = ocrFailedTag
+			log.Warn("OCR_FAILED_TAG is deprecated; use FAIL_TAG")
+		} else {
+			failTag = "paperless-gpt-failed"
+		}
+	}
+	fmt.Printf("Using %s as fail tag\n", failTag)
+
 	if pdfOCRCompleteTag == "" {
 		pdfOCRCompleteTag = "paperless-gpt-ocr-complete"
+	}
+	ocrFailedTag = failTag
+
+	if val, ok := os.LookupEnv("AUTO_TAG_COMPLETE"); ok {
+		autoTagComplete = val
+	} else {
+		autoTagComplete = "paperless-gpt-auto-complete"
+	}
+	if autoTagComplete != "" {
+		fmt.Printf("Using %s as auto tag complete\n", autoTagComplete)
+	} else {
+		fmt.Println("Auto tag complete is disabled")
 	}
 
 	validateOrDefaultObjPermissions()
@@ -697,9 +801,6 @@ func validateOrDefaultEnvVars() {
 	} else if ocrProcessMode != "image" && ocrProcessMode != "pdf" && ocrProcessMode != "whole_pdf" {
 		log.Warnf("Invalid OCR_PROCESS_MODE value: %s, defaulting to image", ocrProcessMode)
 		ocrProcessMode = "image"
-	}
-	if ocrFailedTag == "" {
-		ocrFailedTag = "paperless-gpt-ocr-failed"
 	}
 
 	// Initialize token limit from environment variable
@@ -868,7 +969,7 @@ func loadTemplates() error {
 		// If prompt doesn't exist in prompts dir, copy it from defaults
 		if _, err := os.Stat(promptPath); os.IsNotExist(err) {
 			log.Infof("Prompt '%s' not found, copying from default", name)
-			// #nosec G304 -- template names are fixed by the application and resolved under default_prompts.
+			// #nosec G304 -- template names are fixed and resolved under default_prompts.
 			defaultContent, err := os.ReadFile(defaultPromptPath)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read default prompt '%s': %w", name, err)
@@ -879,7 +980,7 @@ func loadTemplates() error {
 		}
 
 		// Read the final prompt content
-		// #nosec G304 -- template names are fixed by the application and resolved under prompts/.
+		// #nosec G304 -- template names are fixed and resolved under prompts.
 		content, err := os.ReadFile(promptPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read prompt '%s': %w", name, err)
@@ -927,7 +1028,8 @@ func loadTemplates() error {
 	if err != nil {
 		return err
 	}
-	if _, err = loadTemplate("adhoc-analysis_prompt.tmpl"); err != nil {
+	adhocAnalysisTemplate, err = loadTemplate("adhoc-analysis_prompt.tmpl")
+	if err != nil {
 		return err
 	}
 	return nil
@@ -1008,19 +1110,18 @@ func createLLM() (llms.Model, error) {
 		return NewRateLimitedLLM(llm, getRateLimitConfig(false)), nil
 	case "openai":
 		baseURL := os.Getenv("OPENAI_BASE_URL")
-		isAzure := strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure"
-		apiToken, err := resolveOpenAIToken(openaiAPIKey, baseURL, isAzure)
+		token, err := resolveOpenAIToken(openaiAPIKey, baseURL, strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure")
 		if err != nil {
 			return nil, err
 		}
 
 		options := []openai.Option{
 			openai.WithModel(llmModel),
-			openai.WithToken(apiToken),
+			openai.WithToken(token),
 			openai.WithHTTPClient(createCustomHTTPClient()),
 		}
 
-		if isAzure {
+		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
 			if baseURL == "" {
 				return nil, fmt.Errorf("OPENAI_BASE_URL is required for Azure OpenAI")
 			}
@@ -1030,6 +1131,8 @@ func createLLM() (llms.Model, error) {
 				openai.WithEmbeddingModel("this-is-not-used"), // This is mandatory for Azure by langchain-go
 			)
 		} else if baseURL != "" {
+			// OpenAI-compatible endpoints (OpenRouter, LiteLLM, vLLM, mock
+			// servers in E2E tests, ...)
 			options = append(options, openai.WithBaseURL(baseURL))
 		}
 
@@ -1054,6 +1157,16 @@ func createLLM() (llms.Model, error) {
 				opts = append(opts, ollama.WithRunnerNumCtx(parsed))
 			} else if err != nil {
 				log.Warnf("Invalid OLLAMA_CONTEXT_LENGTH value: %v, ignoring", err)
+			}
+		}
+		if thinkStr := os.Getenv("OLLAMA_THINK"); thinkStr != "" {
+			// Allow disabling Ollama reasoning mode for tasks where format
+			// compliance matters more than chain-of-thought (closed-list
+			// classification, strict JSON). Unset = upstream default behavior.
+			if parsed, err := strconv.ParseBool(thinkStr); err == nil {
+				opts = append(opts, ollama.WithThink(parsed))
+			} else {
+				log.Warnf("Invalid OLLAMA_THINK value: %v, ignoring (must be true/false)", err)
 			}
 		}
 		if client := ocr.OllamaHTTPClient(); client != nil {
@@ -1123,19 +1236,18 @@ func createVisionLLM() (llms.Model, error) {
 		return NewRateLimitedLLM(llm, getRateLimitConfig(true)), nil
 	case "openai":
 		baseURL := os.Getenv("OPENAI_BASE_URL")
-		isAzure := strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure"
-		apiToken, err := resolveOpenAIToken(openaiAPIKey, baseURL, isAzure)
+		token, err := resolveOpenAIToken(openaiAPIKey, baseURL, strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure")
 		if err != nil {
 			return nil, err
 		}
 
 		options := []openai.Option{
 			openai.WithModel(visionLlmModel),
-			openai.WithToken(apiToken),
+			openai.WithToken(token),
 			openai.WithHTTPClient(createCustomHTTPClient()),
 		}
 
-		if isAzure {
+		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
 			if baseURL == "" {
 				return nil, fmt.Errorf("OPENAI_BASE_URL is required for Azure OpenAI")
 			}
@@ -1145,6 +1257,8 @@ func createVisionLLM() (llms.Model, error) {
 				openai.WithEmbeddingModel("this-is-not-used"), // This is mandatory for Azure by langchain-go
 			)
 		} else if baseURL != "" {
+			// OpenAI-compatible endpoints (OpenRouter, LiteLLM, vLLM, mock
+			// servers in E2E tests, ...)
 			options = append(options, openai.WithBaseURL(baseURL))
 		}
 
