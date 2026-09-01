@@ -216,7 +216,8 @@ func stripFailedFields(
 ) []string {
 	var dropped []string
 
-	for field := range scalarFields {
+	for apiField := range scalarFields {
+		field := internalDocumentFieldName(apiField)
 		if _, present := updatedFields[field]; present {
 			delete(updatedFields, field)
 			delete(originalFields, field)
@@ -253,8 +254,29 @@ func stripFailedFields(
 	return dropped
 }
 
+func internalDocumentFieldName(apiField string) string {
+	if apiField == "created" {
+		return "created_date"
+	}
+	return apiField
+}
+
+func documentPatchPayload(fields map[string]interface{}) map[string]interface{} {
+	payload := make(map[string]interface{}, len(fields))
+	for field, value := range fields {
+		payload[field] = value
+	}
+
+	if createdDate, ok := payload["created_date"]; ok {
+		payload["created"] = createdDate
+		delete(payload, "created_date")
+	}
+
+	return payload
+}
+
 func (client *PaperlessClient) patchDocumentFields(ctx context.Context, path string, documentID int, fields map[string]interface{}) (int, []byte, error) {
-	jsonData, err := json.Marshal(fields)
+	jsonData, err := json.Marshal(documentPatchPayload(fields))
 	if err != nil {
 		return 0, nil, fmt.Errorf("error marshalling JSON for document %d: %w", documentID, err)
 	}
@@ -687,7 +709,7 @@ func (client *PaperlessClient) GetDocumentsByTag(ctx context.Context, tag string
 			Tags:             tagNames,
 			Owner:            result.Owner,
 			Permissions:      result.Permissions,
-			CreatedDate:      result.CreatedDate,
+			CreatedDate:      result.paperlessCreatedDate(),
 			OriginalFileName: result.OriginalFileName,
 		})
 	}
@@ -739,7 +761,7 @@ func (client *PaperlessClient) GetSimilarDocuments(ctx context.Context, document
 			ID:               result.ID,
 			Title:            result.Title,
 			Content:          result.Content,
-			CreatedDate:      result.CreatedDate,
+			CreatedDate:      result.paperlessCreatedDate(),
 			OriginalFileName: result.OriginalFileName,
 		})
 	}
@@ -875,7 +897,7 @@ func (client *PaperlessClient) GetDocument(ctx context.Context, documentID int) 
 		Content:          documentResponse.Content,
 		Correspondent:    correspondentName,
 		Tags:             tagNames,
-		CreatedDate:      documentResponse.CreatedDate,
+		CreatedDate:      documentResponse.paperlessCreatedDate(),
 		OriginalFileName: documentResponse.OriginalFileName,
 		CustomFields:     documentResponse.CustomFields,
 		Owner:            documentResponse.Owner,

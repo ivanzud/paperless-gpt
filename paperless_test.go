@@ -103,6 +103,30 @@ func TestCorrespondentOmitsNilOwner(t *testing.T) {
 	assert.NotContains(t, string(payload), `"set_permissions"`)
 }
 
+func TestPaperlessCreatedDateCompatibility(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		expected string
+	}{
+		{name: "canonical", payload: `{"created":"2026-08-31"}`, expected: "2026-08-31"},
+		{name: "legacy fallback", payload: `{"created_date":"2025-03-24"}`, expected: "2025-03-24"},
+		{name: "canonical preferred", payload: `{"created":"2026-08-31","created_date":"2025-03-24"}`, expected: "2026-08-31"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var listResult GetDocumentApiResponseResult
+			require.NoError(t, json.Unmarshal([]byte(tt.payload), &listResult))
+			assert.Equal(t, tt.expected, listResult.paperlessCreatedDate())
+
+			var detailResult GetDocumentApiResponse
+			require.NoError(t, json.Unmarshal([]byte(tt.payload), &detailResult))
+			assert.Equal(t, tt.expected, detailResult.paperlessCreatedDate())
+		})
+	}
+}
+
 func TestGetPermissionsDocumentModeCopiesOwnerAndPermissions(t *testing.T) {
 	originalMode := objPermissions
 	objPermissions = "document"
@@ -557,11 +581,12 @@ func TestUpdateDocuments(t *testing.T) {
 		expectedFields := map[string]interface{}{
 			"title": "New Title",
 			// do not keep previous tags since the tag generation will already take care to include old ones:
-			"tags":         []interface{}{float64(idTag2), float64(idTag3)},
-			"created_date": "1999-09-02",
+			"tags":    []interface{}{float64(idTag2), float64(idTag3)},
+			"created": "1999-09-02",
 		}
 
 		assert.Equal(t, expectedFields, updatedFields)
+		assert.NotContains(t, updatedFields, "created_date")
 
 		w.WriteHeader(http.StatusOK)
 	})
@@ -655,6 +680,7 @@ func TestUpdateDocuments_DropsInvalidCreatedDateBeforePatch(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "New Title", payload["title"])
+		assert.NotContains(t, payload, "created")
 		assert.NotContains(t, payload, "created_date")
 
 		w.WriteHeader(http.StatusOK)
@@ -665,6 +691,63 @@ func TestUpdateDocuments_DropsInvalidCreatedDateBeforePatch(t *testing.T) {
 	require.True(t, errors.As(err, &partial))
 	assert.Equal(t, 1, partial.DocumentID)
 	assert.Equal(t, []string{"created_date"}, partial.DroppedFields)
+}
+
+func TestUpdateDocumentsMapsCreatedValidationErrorToInternalField(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+	const documentID = 9201
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+
+	document := DocumentSuggestion{
+		ID: documentID,
+		OriginalDocument: Document{
+			ID:          documentID,
+			Title:       "Old Title",
+			CreatedDate: "2023-01-01",
+		},
+		SuggestedTitle:       "New Title",
+		SuggestedCreatedDate: "2023-02-01",
+	}
+
+	patchCalls := 0
+	env.setMockResponse("/api/documents/9201/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		patchCalls++
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		defer r.Body.Close()
+
+		var payload map[string]interface{}
+		require.NoError(t, json.Unmarshal(bodyBytes, &payload))
+
+		if patchCalls == 1 {
+			assert.Equal(t, "2023-02-01", payload["created"])
+			assert.NotContains(t, payload, "created_date")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"created":["Invalid date"]}`))
+			return
+		}
+
+		assert.Equal(t, map[string]interface{}{"title": "New Title"}, payload)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{document}, env.db, false)
+	var partial *PartialUpdateError
+	require.True(t, errors.As(err, &partial))
+	assert.Equal(t, []string{"created_date"}, partial.DroppedFields)
+	assert.Equal(t, 2, patchCalls)
+
+	var history []ModificationHistory
+	require.NoError(t, env.db.Where("document_id = ?", document.ID).Find(&history).Error)
+	require.Len(t, history, 1)
+	assert.Equal(t, "title", history[0].ModField)
 }
 
 func TestUpdateDocuments_StripsRejectedCustomFieldAndRetries(t *testing.T) {
