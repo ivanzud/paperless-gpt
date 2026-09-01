@@ -756,16 +756,7 @@ func validateOrDefaultEnvVars() {
 		fmt.Println("Auto tag complete is disabled")
 	}
 
-	rawCorrespondentPromptLimit := os.Getenv("CORRESPONDENT_PROMPT_LIMIT")
-	if rawCorrespondentPromptLimit == "" {
-		correspondentPromptLimit = 0
-	} else {
-		var err error
-		correspondentPromptLimit, err = strconv.Atoi(rawCorrespondentPromptLimit)
-		if err != nil || correspondentPromptLimit < 0 {
-			log.Fatalf("Invalid CORRESPONDENT_PROMPT_LIMIT value: %q (must be a non-negative integer, 0 sends the full list)", rawCorrespondentPromptLimit)
-		}
-	}
+	correspondentPromptLimit = loadCorrespondentPromptLimit()
 
 	validateOrDefaultObjPermissions()
 
