@@ -127,6 +127,7 @@
 {"created_at":"2026-03-02T20:49:34Z","created_by":"ivanzud","depends_on_id":"src-4pr","issue_id":"src-4pr.98","type":"parent-child"}
 {"created_at":"2026-03-02T20:49:34Z","created_by":"ivanzud","depends_on_id":"src-4pr","issue_id":"src-4pr.99","type":"parent-child"}
 {"created_at":"2026-03-26T03:34:20Z","created_by":"ivanzud","depends_on_id":"src-6sg","issue_id":"src-6m1","type":"discovered-from"}
+{"created_at":"2026-09-01T05:31:31Z","created_by":"ivanzud","depends_on_id":"src-ac1","issue_id":"src-afy","type":"discovered-from"}
 {"created_at":"2026-03-26T03:42:01Z","created_by":"ivanzud","depends_on_id":"src-6m1","issue_id":"src-inc","type":"discovered-from"}
 {"created_at":"2026-03-02T20:49:19Z","created_by":"ivanzud","depends_on_id":"src-u3m","issue_id":"src-u3m.1","type":"parent-child"}
 {"created_at":"2026-03-02T20:49:20Z","created_by":"ivanzud","depends_on_id":"src-u3m","issue_id":"src-u3m.10","type":"parent-child"}
