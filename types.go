@@ -51,11 +51,11 @@ type GetDocumentApiResponseResult struct {
 	Correspondent int `json:"correspondent"`
 	// DocumentType        interface{}   `json:"document_type"`
 	// StoragePath         interface{}   `json:"storage_path"`
-	Title   string `json:"title"`
-	Content string `json:"content"`
-	Tags    []int  `json:"tags"`
-	// Created             time.Time     `json:"created"`
-	CreatedDate string `json:"created_date"`
+	Title                 string `json:"title"`
+	Content               string `json:"content"`
+	Tags                  []int  `json:"tags"`
+	CreatedDate           string `json:"created"`
+	DeprecatedCreatedDate string `json:"created_date,omitempty"`
 	// Modified            time.Time     `json:"modified"`
 	// Added               time.Time     `json:"added"`
 	// ArchiveSerialNumber interface{}   `json:"archive_serial_number"`
@@ -70,6 +70,13 @@ type GetDocumentApiResponseResult struct {
 	// 	NoteHighlights string  `json:"note_highlights"`
 	// 	Rank           int     `json:"rank"`
 	// } `json:"__search_hit__"`
+}
+
+func (result GetDocumentApiResponseResult) paperlessCreatedDate() string {
+	if result.CreatedDate != "" {
+		return result.CreatedDate
+	}
+	return result.DeprecatedCreatedDate
 }
 
 // CustomFieldResponse represents a custom field with its value for a document
@@ -94,18 +101,26 @@ type DocumentNote struct {
 // GetDocumentApiResponse is the response payload for /documents/{id} endpoint.
 // But we are only interested in a subset of the fields.
 type GetDocumentApiResponse struct {
-	ID               int                   `json:"id"`
-	Correspondent    int                   `json:"correspondent"`
-	DocumentType     int                   `json:"document_type"`
-	Title            string                `json:"title"`
-	Content          string                `json:"content"`
-	Tags             []int                 `json:"tags"`
-	CreatedDate      string                `json:"created_date"`
-	OriginalFileName string                `json:"original_file_name"`
-	Owner            int                   `json:"owner"`
-	Permissions      DocumentPermissions   `json:"permissions"`
-	Notes            []DocumentNote        `json:"notes"`
-	CustomFields     []CustomFieldResponse `json:"custom_fields"`
+	ID                    int                   `json:"id"`
+	Correspondent         int                   `json:"correspondent"`
+	DocumentType          int                   `json:"document_type"`
+	Title                 string                `json:"title"`
+	Content               string                `json:"content"`
+	Tags                  []int                 `json:"tags"`
+	CreatedDate           string                `json:"created"`
+	DeprecatedCreatedDate string                `json:"created_date,omitempty"`
+	OriginalFileName      string                `json:"original_file_name"`
+	Owner                 int                   `json:"owner"`
+	Permissions           DocumentPermissions   `json:"permissions"`
+	Notes                 []DocumentNote        `json:"notes"`
+	CustomFields          []CustomFieldResponse `json:"custom_fields"`
+}
+
+func (response GetDocumentApiResponse) paperlessCreatedDate() string {
+	if response.CreatedDate != "" {
+		return response.CreatedDate
+	}
+	return response.DeprecatedCreatedDate
 }
 
 // Document is a stripped down version of the document object from paperless-ngx.

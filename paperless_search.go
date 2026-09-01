@@ -84,7 +84,7 @@ func (client *PaperlessClient) SearchDocuments(ctx context.Context, query string
 			Content:       result.Content,
 			Correspondent: correspondentName,
 			Tags:          tagNames,
-			CreatedDate:   result.CreatedDate,
+			CreatedDate:   result.paperlessCreatedDate(),
 		})
 	}
 
