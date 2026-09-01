@@ -230,6 +230,64 @@ func TestTokenLimitInCorrespondentGeneration(t *testing.T) {
 	assert.LessOrEqual(t, len(tokens), 50, "Final prompt should be within token limit")
 }
 
+func TestCorrespondentPromptLimitPreventsTemplateOverflow(t *testing.T) {
+	originalTokenLimit := tokenLimit
+	originalCorrespondentPromptLimit := correspondentPromptLimit
+	originalCorrespondentTemplate := correspondentTemplate
+	defer func() {
+		tokenLimit = originalTokenLimit
+		correspondentPromptLimit = originalCorrespondentPromptLimit
+		correspondentTemplate = originalCorrespondentTemplate
+	}()
+
+	correspondentTemplate = template.Must(template.New("correspondent-limit").Parse(`
+Correspondents: {{.AvailableCorrespondents}}
+Blacklist: {{.BlackList}}
+Title: {{.Title}}
+Content: {{.Content}}
+Language: {{.Language}}
+`))
+	tokenLimit = 1500
+	correspondentPromptLimit = 25
+
+	correspondents := make([]string, 252)
+	for i := range correspondents {
+		correspondents[i] = fmt.Sprintf(
+			"Example International Correspondent Organization Number %03d Billing Services Incorporated",
+			i,
+		)
+	}
+	target := correspondents[len(correspondents)-1]
+	templateData := map[string]interface{}{
+		"Language":                "English",
+		"AvailableCorrespondents": correspondents,
+		"BlackList":               []string{},
+		"Title":                   target + " invoice",
+	}
+
+	_, err := getAvailableTokensForContent(correspondentTemplate, templateData)
+	require.ErrorContains(t, err, "prompt template exceeds token limit")
+
+	mockLLM := &mockLLM{Response: target}
+	app := &App{LLM: mockLLM}
+	suggestion, err := app.generateSingleDocumentSuggestion(
+		context.Background(),
+		GenerateSuggestionsRequest{GenerateCorrespondents: true},
+		Document{ID: 42, Title: target + " invoice", Content: "Monthly account statement"},
+		suggestionGenerationContext{availableCorrespondentNames: correspondents},
+		logrus.WithField("test", "correspondent-prompt-limit"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, target, suggestion.SuggestedCorrespondent)
+	assert.Contains(t, mockLLM.lastPrompt, target)
+	correspondentLine := strings.SplitN(strings.TrimSpace(mockLLM.lastPrompt), "\n", 2)[0]
+	assert.Equal(t, correspondentPromptLimit, strings.Count(correspondentLine, "Billing Services Incorporated"))
+
+	promptTokens, err := getTokenCount(mockLLM.lastPrompt)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, promptTokens, tokenLimit)
+}
+
 func TestTokenLimitInTagGeneration(t *testing.T) {
 	originalTokenLimit := tokenLimit
 	defer func() { tokenLimit = originalTokenLimit }()
