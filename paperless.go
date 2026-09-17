@@ -961,7 +961,6 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				finalTagNames = append([]string(nil), document.SuggestedTags...)
 			}
 		}
-		finalTagNames = append(finalTagNames, document.AddTags...)
 		var cleanedTags []string
 		for _, tagName := range finalTagNames {
 			isRemoved := false
@@ -977,6 +976,16 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 		finalTagNames = cleanedTags
 
+		// Tags paperless-gpt adds mechanically to mark a document as done
+		// (AUTO_TAG_COMPLETE). These are applied *after* the RemoveTags pass on
+		// purpose: the trigger tag being removed and the completion tag being
+		// added are two halves of the same handover, and when a user configures
+		// both to the same name the completion tag has to win — otherwise the
+		// document ends up with neither and looks unprocessed.
+		finalTagNames = append(finalTagNames, document.AddTags...)
+
+		// Case-insensitive compaction: also trims and drops empties, and matches
+		// the case-insensitive comparison the RemoveTags pass above uses.
 		finalTagNames = compactTagNamesCaseInsensitive(finalTagNames)
 		var appliedTagNames []string
 
@@ -1029,7 +1038,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 
 		// --- CORRESPONDENT ---
-		if document.SuggestedCorrespondent != "" && document.SuggestedCorrespondent != originalDoc.Correspondent {
+		// With PRESERVE_EXISTING_METADATA, a correspondent that is already set
+		// wins over the suggestion. That leaves paperless-ngx' own classifier (or
+		// a manual correction) in charge and limits the LLM to documents that do
+		// not have a correspondent yet.
+		if document.SuggestedCorrespondent != "" && document.SuggestedCorrespondent != originalDoc.Correspondent &&
+			!(preserveExistingMetadata && originalDoc.Correspondent != "") {
 			originalFields["correspondent"] = originalDoc.Correspondent
 			if corrID, exists := availableCorrespondents[document.SuggestedCorrespondent]; exists {
 				updatedFields["correspondent"] = corrID
@@ -1045,7 +1059,10 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 
 		// --- DOCUMENT TYPE ---
-		if document.SuggestedDocumentType != "" && document.SuggestedDocumentType != originalDoc.DocumentTypeName {
+		// Same as above: an existing document type is kept when
+		// PRESERVE_EXISTING_METADATA is enabled.
+		if document.SuggestedDocumentType != "" && document.SuggestedDocumentType != originalDoc.DocumentTypeName &&
+			!(preserveExistingMetadata && originalDoc.DocumentTypeName != "") {
 			originalFields["document_type"] = originalDoc.DocumentTypeName
 			if docTypeID, exists := availableDocumentTypes[document.SuggestedDocumentType]; exists {
 				updatedFields["document_type"] = docTypeID
@@ -1136,12 +1153,28 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				containsTagCaseInsensitive(originalDoc.Tags, manualTag) ||
 				containsTagCaseInsensitive(originalDoc.Tags, autoOcrTag) {
 				var finalTagIDs []int
+				seenTagIDs := make(map[int]bool)
+				appendTagID := func(tagName string) {
+					_, tagID, exists := findTagIDCaseInsensitive(availableTags, tagName)
+					if !exists || seenTagIDs[tagID] {
+						return
+					}
+					seenTagIDs[tagID] = true
+					finalTagIDs = append(finalTagIDs, tagID)
+				}
 				for _, tagName := range originalDoc.Tags {
 					if !strings.EqualFold(tagName, autoTag) && !strings.EqualFold(tagName, manualTag) && !strings.EqualFold(tagName, autoOcrTag) {
-						if _, tagID, exists := findTagIDCaseInsensitive(availableTags, tagName); exists {
-							finalTagIDs = append(finalTagIDs, tagID)
-						}
+						appendTagID(tagName)
 					}
+				}
+				// Tags paperless-gpt adds mechanically (AUTO_TAG_COMPLETE) have
+				// to be applied on this path too, and after the trigger-tag
+				// removal above so an added tag wins a name collision. Without
+				// this, a document whose suggestions happened to match what it
+				// already had would lose its trigger tag and never gain a
+				// completion tag — it just looks unprocessed.
+				for _, tagName := range document.AddTags {
+					appendTagID(tagName)
 				}
 				// Mark that we need to remove tags
 				// We'll send the tag update directly (even if empty) since there are no other field changes
