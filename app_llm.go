@@ -188,7 +188,11 @@ func (app *App) getSuggestedTags(
 				}
 			}
 		}
-		return filteredTags, nil
+		// The original tags were merged in above, and on a document being
+		// processed those include the trigger tag paperless-gpt is reacting to.
+		// With CREATE_NEW_TAGS on, nothing else here would drop them, so a
+		// system tag would come back out as a "suggestion" and be re-applied.
+		return removeSystemTags(filteredTags), nil
 	}
 
 	filteredTags := []string{}
@@ -201,7 +205,10 @@ func (app *App) getSuggestedTags(
 		}
 	}
 
-	return filteredTags, nil
+	// Belt and braces: availableTags is already system-tag-free, so this only
+	// matters if that ever regresses. paperless-gpt applies its own tags
+	// through AddTags/RemoveTags, never through a suggestion.
+	return removeSystemTags(filteredTags), nil
 }
 
 // getSuggestedDocumentType generates a suggested document type for a document using the LLM

@@ -60,13 +60,19 @@ test('treats empty and non-terminal responses as pending', () => {
   );
 });
 
-test('rejects failed tasks and successful tasks without a document ID', () => {
+test('rejects failed tasks', () => {
   assert.throws(
     () => inspectPaperlessTaskPayload({ results: [{ status: 'failed', result: 'bad input' }] }),
     /Document processing failed/,
   );
-  assert.throws(
-    () => inspectPaperlessTaskPayload({ results: [{ status: 'success', id: 99 }] }),
-    /succeeded without a document ID/,
+});
+
+test('flags a success without a document ID as pending rather than throwing', () => {
+  // paperless-ngx 3.x can report SUCCESS a poll before the document id appears.
+  // The caller counts consecutive occurrences and fails the run if it persists,
+  // so this stays a signal here instead of an immediate hard error.
+  assert.deepEqual(
+    inspectPaperlessTaskPayload({ results: [{ status: 'success', id: 99 }] }),
+    { state: 'pending', successWithoutDocumentId: true },
   );
 });

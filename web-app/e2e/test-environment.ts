@@ -97,11 +97,12 @@ export async function setupTestEnvironment(config?: TestEnvironmentConfig): Prom
     started.push(postgres);
 
     console.log('Starting Paperless-ngx container...');
-    const paperlessNgx = await new GenericContainer('ghcr.io/paperless-ngx/paperless-ngx:3.0.4')
+    const paperlessNgx = await new GenericContainer('ghcr.io/paperless-ngx/paperless-ngx:3.1.3@sha256:aa810a36942c63d4ee70d00eda7236cd3d6acfb7eb3f7987fb568ed14df8817a')
       .withNetwork(network)
       .withNetworkAliases('paperless-ngx')
       .withEnvironment({
         PAPERLESS_URL: `http://localhost:${paperlessPort}`,
+        // paperless-ngx rejects its documented placeholder as insecure.
         PAPERLESS_SECRET_KEY:
           'paperless-gpt-e2e-only-2026-07-31-do-not-use-outside-tests-4fc62ba31d93',
         PAPERLESS_ADMIN_USER: 'admin',
@@ -252,6 +253,10 @@ export async function uploadDocument(
   const taskId = await uploadResponse.json();
   const deadline = Date.now() + 60_000;
   let pollDelayMs = 250;
+  // A SUCCESS with no document id is usually just paperless-ngx 3.x being a
+  // poll ahead of itself; persisting across several polls means it is real.
+  const maxSuccessWithoutDocumentIdPolls = 5;
+  let successWithoutDocumentIdPolls = 0;
 
   // Poll the tasks endpoint until document is processed
   while (Date.now() < deadline) {
@@ -286,6 +291,17 @@ export async function uploadDocument(
       return await documentResponse.json();
     }
     
+    if (taskState.successWithoutDocumentId) {
+      successWithoutDocumentIdPolls++;
+      if (successWithoutDocumentIdPolls >= maxSuccessWithoutDocumentIdPolls) {
+        throw new Error(
+          `Document task ${taskId} succeeded without a document ID after ${successWithoutDocumentIdPolls} polls: ${JSON.stringify(taskPayload)}`
+        );
+      }
+    } else {
+      successWithoutDocumentIdPolls = 0;
+    }
+
     await new Promise(resolve => setTimeout(resolve, pollDelayMs));
     pollDelayMs = Math.min(pollDelayMs * 2, 2_000);
   }

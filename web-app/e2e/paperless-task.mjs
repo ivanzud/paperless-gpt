@@ -37,8 +37,12 @@ export function inspectPaperlessTaskPayload(payload) {
     asDocumentId(task.related_document_ids?.[0]) ??
     (isLegacyResponse ? asDocumentId(task.id) : undefined);
 
+  // paperless-ngx 3.x can report SUCCESS a beat before the document id lands on
+  // the task, so this is not immediately fatal. It is still abnormal, so the
+  // state is flagged and the caller decides how many consecutive polls to
+  // tolerate before giving up -- keeping this function pure.
   if (!documentId) {
-    throw new Error(`Document task succeeded without a document ID: ${JSON.stringify(task)}`);
+    return { state: 'pending', successWithoutDocumentId: true };
   }
 
   return { state: 'success', documentId };
