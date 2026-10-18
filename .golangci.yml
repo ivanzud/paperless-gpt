@@ -1,0 +1,22 @@
+version: "2"
+
+linters:
+  settings:
+    staticcheck:
+      # v2 folded stylecheck and gopls quick fixes into staticcheck. Keep the
+      # bug-finding checks v1.64 ran (SA*, plus S1* from gosimple).
+      checks:
+        - "all"
+        - "-ST*"
+        - "-QF*"
+  # golangci-lint v2 dropped v1's built-in exclusions; these presets restore
+  # them so the default linter set reports what v1.64 did.
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - web-app/node_modules

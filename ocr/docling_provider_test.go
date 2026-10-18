@@ -208,7 +208,7 @@ func TestDoclingProvider_SendsConfiguredOutputFormat(t *testing.T) {
 			Document: DoclingDocumentResponse{TextContent: "plain text"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 	defer server.Close()
 

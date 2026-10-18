@@ -45,7 +45,7 @@ func TestUploadDocumentVersionSendsOnlyDocumentAndLabel(t *testing.T) {
 			}
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-abc"`))
+		_, _ = w.Write([]byte(`"task-abc"`))
 	})
 
 	taskID, err := env.client.UploadDocumentVersion(context.Background(), 42, pdfData, "00000042_paperless-gpt_ocr.pdf", "paperless-gpt OCR")
@@ -66,7 +66,7 @@ func TestUploadDocumentVersionTruncatesLongLabel(t *testing.T) {
 		require.NoError(t, r.ParseMultipartForm(10<<20))
 		gotLabel = r.FormValue("version_label")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-1"`))
+		_, _ = w.Write([]byte(`"task-1"`))
 	})
 
 	label := strings.Repeat("é", maxVersionLabelLength+10)
@@ -81,7 +81,7 @@ func TestUploadDocumentVersionNotFoundMentionsVersionSupport(t *testing.T) {
 
 	env.setMockResponse("/api/documents/9/update_version/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"detail":"Not found."}`))
+		_, _ = w.Write([]byte(`{"detail":"Not found."}`))
 	})
 
 	_, err := env.client.UploadDocumentVersion(context.Background(), 9, []byte("%PDF"), "f.pdf", "")
@@ -98,26 +98,26 @@ func TestUploadProcessedPDFVersionModeNeverCreatesOrDeletes(t *testing.T) {
 	env.setMockResponse("/api/documents/123/update_version/", func(w http.ResponseWriter, r *http.Request) {
 		versionUploads++
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-v1"`))
+		_, _ = w.Write([]byte(`"task-v1"`))
 	})
 	taskPolls := 0
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		taskPolls++
 		assert.Equal(t, "task-v1", r.URL.Query().Get("task_id"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":1,"next":null,"previous":null,"results":[{"task_id":"task-v1","status":"success"}]}`))
+		_, _ = w.Write([]byte(`{"count":1,"next":null,"previous":null,"results":[{"task_id":"task-v1","status":"success"}]}`))
 	})
 	env.setMockResponse("/api/documents/post_document/", func(w http.ResponseWriter, r *http.Request) {
 		t.Error("version mode must not upload a new document")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-new"`))
+		_, _ = w.Write([]byte(`"task-new"`))
 	})
 	env.setMockResponse("/api/documents/123/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			t.Error("version mode must never delete the original")
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(GetDocumentApiResponse{ID: documentID, Title: "Scan"})
+		_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{ID: documentID, Title: "Scan"})
 	})
 
 	app := &App{
@@ -141,11 +141,11 @@ func TestUploadProcessedPDFVersionModeReportsRejectedImport(t *testing.T) {
 
 	env.setMockResponse("/api/documents/55/update_version/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-bad"`))
+		_, _ = w.Write([]byte(`"task-bad"`))
 	})
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":1,"results":[{"task_id":"task-bad","status":"failure","result_data":{"error":"Not consuming: it is a duplicate"}}]}`))
+		_, _ = w.Write([]byte(`{"count":1,"results":[{"task_id":"task-bad","status":"failure","result_data":{"error":"Not consuming: it is a duplicate"}}]}`))
 	})
 
 	app := &App{Client: env.client, Database: env.db}
@@ -163,13 +163,13 @@ func TestUploadProcessedPDFVersionModeTreatsPendingImportAsUnconfirmed(t *testin
 
 	env.setMockResponse("/api/documents/56/update_version/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-slow"`))
+		_, _ = w.Write([]byte(`"task-slow"`))
 	})
 	polls := 0
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		polls++
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":1,"results":[{"task_id":"task-slow","status":"started"}]}`))
+		_, _ = w.Write([]byte(`{"count":1,"results":[{"task_id":"task-slow","status":"started"}]}`))
 	})
 
 	app := &App{Client: env.client, Database: env.db}
@@ -188,7 +188,7 @@ func TestUploadProcessedPDFVersionModeKeepsPollingAfterTransientError(t *testing
 
 	env.setMockResponse("/api/documents/57/update_version/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-flaky"`))
+		_, _ = w.Write([]byte(`"task-flaky"`))
 	})
 	polls := 0
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +198,7 @@ func TestUploadProcessedPDFVersionModeKeepsPollingAfterTransientError(t *testing
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":1,"results":[{"task_id":"task-flaky","status":"failure","result":"bad pdf"}]}`))
+		_, _ = w.Write([]byte(`{"count":1,"results":[{"task_id":"task-flaky","status":"failure","result":"bad pdf"}]}`))
 	})
 
 	app := &App{Client: env.client, Database: env.db}
@@ -256,7 +256,7 @@ func testVersionModeUploadsSearchablePDF(t *testing.T, processMode string) {
 	const documentID = 2044
 	env.setMockResponse(fmt.Sprintf("/api/documents/%d/download/", documentID), func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(original)
+		_, _ = w.Write(original)
 	})
 	env.client.CacheFolder = t.TempDir()
 
@@ -267,11 +267,11 @@ func testVersionModeUploadsSearchablePDF(t *testing.T, processMode string) {
 		require.NoError(t, err)
 		uploaded, _ = io.ReadAll(file)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-e2e"`))
+		_, _ = w.Write([]byte(`"task-e2e"`))
 	})
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":1,"results":[{"task_id":"task-e2e","status":"success"}]}`))
+		_, _ = w.Write([]byte(`{"count":1,"results":[{"task_id":"task-e2e","status":"success"}]}`))
 	})
 	env.setMockResponse("/api/documents/post_document/", func(w http.ResponseWriter, r *http.Request) {
 		t.Error("version mode must not upload a new document")

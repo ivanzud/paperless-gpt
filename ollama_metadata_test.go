@@ -133,7 +133,7 @@ func TestCreateLLMOllamaUsesNativeClientAndBaselineTemperature(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := model.(*RateLimitedLLM)
 	require.True(t, ok, "the existing rate-limit wrapper must remain in place")
-	response, err := model.Call(context.Background(), "Return a title")
+	response, err := model.Call(context.Background(), "Return a title") //nolint:staticcheck // exercises the deprecated Call path the client still implements
 	require.NoError(t, err)
 	assert.Equal(t, "title", response)
 	assert.Equal(t, "Bearer a=b", authorization)
@@ -173,7 +173,7 @@ func TestCreateLLMOllamaTemperature(t *testing.T) {
 
 			model, err := createLLM()
 			require.NoError(t, err)
-			_, err = model.Call(context.Background(), "Return a title")
+			_, err = model.Call(context.Background(), "Return a title") //nolint:staticcheck // exercises the deprecated Call path the client still implements
 			require.NoError(t, err)
 			assert.Equal(t, testCase.want, request["options"].(map[string]any)["temperature"])
 		})
@@ -212,7 +212,7 @@ func TestLLMTemperatureDoesNotAffectOllamaVision(t *testing.T) {
 
 	model, err := createVisionLLM()
 	require.NoError(t, err)
-	_, err = model.Call(context.Background(), "Read this image")
+	_, err = model.Call(context.Background(), "Read this image") //nolint:staticcheck // exercises the deprecated Call path the client still implements
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, request["options"].(map[string]any)["temperature"])
 }
@@ -232,7 +232,7 @@ func TestLLMTemperatureDoesNotAffectOpenAI(t *testing.T) {
 
 	model, err := createLLM()
 	require.NoError(t, err)
-	_, err = model.Call(context.Background(), "Return a title")
+	_, err = model.Call(context.Background(), "Return a title") //nolint:staticcheck // exercises the deprecated Call path the client still implements
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, request["temperature"])
 }

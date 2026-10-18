@@ -83,13 +83,14 @@ func Open(ctx context.Context, data []byte) (*Document, error) {
 	}
 	opened, err := instance.OpenDocument(&requests.OpenDocument{File: &data})
 	if err != nil {
-		instance.Close()
+		_ = instance.Close()
 		return nil, fmt.Errorf("opening PDF: %w", err)
 	}
 	count, err := instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: opened.Document})
 	if err != nil {
-		instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
-		instance.Close()
+		// Best effort: the page-count error is the one worth reporting.
+		_, _ = instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
+		_ = instance.Close()
 		return nil, fmt.Errorf("counting pages: %w", err)
 	}
 	return &Document{instance: instance, doc: opened.Document, pages: count.PageCount}, nil

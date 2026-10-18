@@ -1128,17 +1128,6 @@ func documentLogger(documentID int) *logrus.Entry {
 	return log.WithField("document_id", documentID)
 }
 
-// removeTagFromList removes a specific tag from a list of tags
-func removeTagFromList(tags []string, tagToRemove string) []string {
-	filteredTags := []string{}
-	for _, tag := range tags {
-		if tag != tagToRemove {
-			filteredTags = append(filteredTags, tag)
-		}
-	}
-	return filteredTags
-}
-
 // systemTags returns every tag paperless-gpt manages itself: the triggers it
 // watches for and the markers it writes, including per-workflow trigger and
 // completion tags. None of them describe a document, so none of them belong
@@ -1237,6 +1226,7 @@ func loadTemplates() error {
 			if err != nil {
 				return nil, fmt.Errorf("failed to read default prompt '%s': %w", name, err)
 			}
+			// #nosec G703 -- promptPath joins a fixed template name onto the prompts directory.
 			if err := os.WriteFile(promptPath, defaultContent, 0600); err != nil {
 				return nil, fmt.Errorf("failed to write prompt '%s': %w", name, err)
 			}
@@ -1253,8 +1243,11 @@ func loadTemplates() error {
 		// give it the current default, so fixes to the default prompts reach
 		// existing installations too.
 		if isPreviousDefaultPrompt(name, content) {
+			// #nosec G304 -- template names are fixed and resolved under default_prompts.
 			if defaultContent, err := os.ReadFile(defaultPromptPath); err == nil && !bytes.Equal(defaultContent, content) {
-				if err := os.WriteFile(promptPath, defaultContent, 0644); err != nil {
+				// Same mode as a freshly copied default above.
+				// #nosec G703 -- promptPath joins a fixed template name onto the prompts directory.
+				if err := os.WriteFile(promptPath, defaultContent, 0600); err != nil {
 					log.Warnf("Prompt '%s' is an outdated default but could not be updated: %v", name, err)
 				} else {
 					log.Infof("Prompt '%s' was an unchanged earlier default; updated it to the current default", name)

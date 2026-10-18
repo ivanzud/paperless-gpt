@@ -271,6 +271,7 @@ func readWorkflowDir(dir string) (WorkflowConfig, error) {
 	if !workflowIDPattern.MatchString(id) {
 		return WorkflowConfig{}, fmt.Errorf("the directory name must be lowercase letters, digits, '-' or '_'")
 	}
+	// #nosec G304 -- dir's base name was validated against workflowIDPattern above.
 	data, err := os.ReadFile(filepath.Join(dir, workflowFileName))
 	if err != nil {
 		return WorkflowConfig{}, err
@@ -302,6 +303,7 @@ func readWorkflowDir(dir string) (WorkflowConfig, error) {
 		return WorkflowConfig{}, fmt.Errorf("%s has no trigger_tag", workflowFileName)
 	}
 	for key, file := range workflowPromptFiles {
+		// #nosec G304 -- validated workflow directory plus a fixed workflowPromptFiles name.
 		content, err := os.ReadFile(filepath.Join(dir, file))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -321,7 +323,7 @@ func readWorkflowDir(dir string) (WorkflowConfig, error) {
 }
 
 func writeWorkflowDir(dir string, wf WorkflowConfig) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	f := workflowFile{
@@ -374,13 +376,13 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)

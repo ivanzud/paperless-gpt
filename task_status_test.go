@@ -25,7 +25,7 @@ func TestGetTaskStatusReadsEveryResponseShape(t *testing.T) {
 			defer env.teardown()
 			env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(body))
+				_, _ = w.Write([]byte(body))
 			})
 
 			task, err := env.client.GetTaskStatus(context.Background(), "t1")
@@ -41,7 +41,7 @@ func TestGetTaskStatusUnknownTask(t *testing.T) {
 	defer env.teardown()
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":0,"next":null,"previous":null,"results":[]}`))
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"previous":null,"results":[]}`))
 	})
 
 	_, err := env.client.GetTaskStatus(context.Background(), "missing")
@@ -65,19 +65,19 @@ func TestReplaceKeepsOriginalWhenPaperlessRejectsUpload(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(GetDocumentApiResponse{ID: documentID, Title: "Scan"})
+		_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{ID: documentID, Title: "Scan"})
 	})
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":0,"next":null,"previous":null,"results":[]}`))
+		_, _ = w.Write([]byte(`{"count":0,"next":null,"previous":null,"results":[]}`))
 	})
 	env.setMockResponse("/api/documents/post_document/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`"task-rep"`))
+		_, _ = w.Write([]byte(`"task-rep"`))
 	})
 	env.setMockResponse("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count":1,"results":[{"task_id":"task-rep","status":"failure"}]}`))
+		_, _ = w.Write([]byte(`{"count":1,"results":[{"task_id":"task-rep","status":"failure"}]}`))
 	})
 
 	app := &App{Client: env.client, Database: env.db}

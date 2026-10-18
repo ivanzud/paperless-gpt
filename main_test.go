@@ -13,11 +13,8 @@ import (
 )
 
 type TestCase struct {
-	name           string
-	documents      []TestDocument
-	expectedCount  int
-	expectedError  string
-	updateResponse int // HTTP status code for update response
+	name      string
+	documents []TestDocument
 }
 
 func TestRunHTTPServerReturnsUnexpectedListenError(t *testing.T) {
