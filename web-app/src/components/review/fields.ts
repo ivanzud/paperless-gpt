@@ -8,7 +8,7 @@ export type FieldKey =
   | "created_date"
   | "summary";
 
-export type Decision = "pending" | "applied" | "skipped";
+export type Decision = "pending" | "applied" | "skipped" | "discarded";
 
 export const fieldLabels: Record<FieldKey, string> = {
   title: "Title",

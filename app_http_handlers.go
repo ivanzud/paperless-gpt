@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -116,7 +115,7 @@ func (app *App) getAllTagsHandler(c *gin.Context) {
 // getSettingsHandler handles the GET /api/settings endpoint
 func (app *App) getSettingsHandler(c *gin.Context) {
 	// Refresh the cache when settings are requested
-	go refreshCustomFieldsCache(app.Client)
+	go refreshCustomFieldsCache(context.Background(), app.Client)
 
 	settingsMutex.RLock()
 	defer settingsMutex.RUnlock()
@@ -180,7 +179,7 @@ func (app *App) getCustomFieldsHandler(c *gin.Context) {
 	// Check for "force_pull" query parameter
 	if forcePull := c.Query("force_pull"); forcePull == "true" {
 		// Force a refresh of the custom fields cache
-		go refreshCustomFieldsCache(app.Client)
+		go refreshCustomFieldsCache(context.Background(), app.Client)
 	}
 
 	customFieldsCacheMu.RLock()
@@ -337,60 +336,76 @@ func (app *App) updateDocumentsHandler(c *gin.Context) {
 		return
 	}
 
+	// Each document is updated on its own, so one failure cannot strand the
+	// rest of the batch and every document gets its own outcome. A single
+	// UpdateDocuments call over the batch would also surface only the first
+	// partial update.
 	outcomes := make([]documentUpdateOutcome, 0, len(documents))
+	var firstPartial *PartialUpdateError
 	appliedCount := 0
 	failedCount := 0
 	for _, document := range documents {
 		err := app.Client.UpdateDocuments(ctx, []DocumentSuggestion{document}, app.Database, false)
-		if err == nil {
-			appliedCount++
-			outcomes = append(outcomes, documentUpdateOutcome{
-				DocumentID: document.ID,
-				Status:     "applied",
-			})
-			continue
-		}
-
 		var partial *PartialUpdateError
-		if errors.As(err, &partial) {
+		switch {
+		case err == nil:
 			appliedCount++
+			outcomes = append(outcomes, documentUpdateOutcome{DocumentID: document.ID, Status: "applied"})
+		case errors.As(err, &partial):
+			appliedCount++
+			// The update went through without some fields. Flag the document
+			// for review, as the background processor does, rather than report
+			// it as applied.
+			applyFailTagAfterPartialSuccess(ctx, app.Client, app.Database, partial.DocumentID, partial.DroppedFields)
 			outcomes = append(outcomes, documentUpdateOutcome{
 				DocumentID:    document.ID,
 				Status:        "partial",
 				DroppedFields: partial.DroppedFields,
 			})
-			log.Warnf("Documents updated partially: %v", err)
+			if firstPartial == nil {
+				firstPartial = partial
+			}
+			log.Warnf("Document %d updated partially: %v", document.ID, err)
+		default:
+			failedCount++
+			outcomes = append(outcomes, documentUpdateOutcome{DocumentID: document.ID, Status: "failed"})
+			log.Errorf("Error updating document %d: %v", document.ID, err)
 			continue
 		}
-
-		failedCount++
-		outcomes = append(outcomes, documentUpdateOutcome{
-			DocumentID: document.ID,
-			Status:     "failed",
-		})
-		log.Errorf("Error updating document %d: %v", document.ID, err)
+		// Written, fully or partially: the suggestion is no longer pending review.
+		clearPendingReviews(app.Database, []DocumentSuggestion{document})
 	}
 
-	if failedCount == 0 && appliedCount == len(documents) {
-		hasPartial := slices.ContainsFunc(outcomes, func(outcome documentUpdateOutcome) bool {
-			return outcome.Status == "partial"
-		})
-		if !hasPartial {
-			c.Status(http.StatusOK)
-			return
+	if failedCount == 0 && firstPartial == nil {
+		c.Status(http.StatusOK)
+		return
+	}
+
+	// The body carries both shapes: `outcomes` for every document, and
+	// `partial` for the first partially applied one, which the review UI
+	// reads to say what was left out and that the document was tagged.
+	body := gin.H{"status": "partial", "outcomes": outcomes}
+	if firstPartial != nil {
+		body["partial"] = gin.H{
+			"document_id":    firstPartial.DocumentID,
+			"dropped_fields": firstPartial.DroppedFields,
+			"fail_tag":       failTag,
 		}
 	}
 
-	status := "partial"
-	statusCode := http.StatusMultiStatus
-	if appliedCount == 0 {
-		status = "failed"
+	// 207 only when the response covers several documents with differing
+	// outcomes. One partially applied document is a success with details;
+	// nothing applied at all is a failure.
+	statusCode := http.StatusOK
+	switch {
+	case appliedCount == 0:
+		body["status"] = "failed"
+		body["error"] = "Error updating documents"
 		statusCode = http.StatusInternalServerError
+	case len(documents) > 1:
+		statusCode = http.StatusMultiStatus
 	}
-	c.JSON(statusCode, gin.H{
-		"status":   status,
-		"outcomes": outcomes,
-	})
+	c.JSON(statusCode, body)
 }
 
 // submitOCRJobRequest is the optional body of POST /api/documents/:id/ocr.
@@ -459,6 +474,10 @@ func (app *App) submitOCRJobHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "replace_original requires upload_pdf"})
 		return
 	}
+	if options.ReplaceOriginal && options.UploadMode == PDFUploadModeVersion {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "replace_original is not available when PDF_UPLOAD_MODE=version: the PDF is added as a new version and nothing is deleted"})
+		return
+	}
 	if options.UploadPDF && !app.ocrSupportsHOCR() {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Searchable PDFs need an hOCR-capable OCR provider (enable hOCR for the LLM provider)"})
 		return
@@ -504,6 +523,7 @@ func (app *App) submitOCRJobHandler(c *gin.Context) {
 		LimitPages:       options.LimitPages,
 		ProcessMode:      options.ProcessMode,
 		UploadPDF:        options.UploadPDF,
+		UploadMode:       options.UploadMode,
 		ReplaceOriginal:  options.ReplaceOriginal,
 		CopyMetadata:     options.CopyMetadata,
 		PromptOverridden: options.PromptOverride != "",
@@ -563,6 +583,7 @@ func (app *App) getOCRConfigHandler(c *gin.Context) {
 			"limit_pages":      defaults.LimitPages,
 			"process_mode":     defaults.ProcessMode,
 			"upload_pdf":       defaults.UploadPDF,
+			"upload_mode":      defaults.UploadMode,
 			"replace_original": defaults.ReplaceOriginal,
 			"copy_metadata":    defaults.CopyMetadata,
 		},
@@ -610,6 +631,10 @@ func (app *App) updateOCRDefaultsHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "replace_original requires upload_pdf"})
 		return
 	}
+	if defaults.ReplaceOriginal != nil && *defaults.ReplaceOriginal && app.pdfUploadMode == PDFUploadModeVersion {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "replace_original is not available when PDF_UPLOAD_MODE=version"})
+		return
+	}
 	// Mirror the submit-time guard: a saved upload_pdf default without an
 	// hOCR-capable provider would break every run that inherits it.
 	if uploadEnabled && !app.ocrSupportsHOCR() {
@@ -644,6 +669,7 @@ func (app *App) respondWithOCRDefaults(c *gin.Context) {
 			"limit_pages":      effective.LimitPages,
 			"process_mode":     effective.ProcessMode,
 			"upload_pdf":       effective.UploadPDF,
+			"upload_mode":      effective.UploadMode,
 			"replace_original": effective.ReplaceOriginal,
 			"copy_metadata":    effective.CopyMetadata,
 		},
@@ -1027,6 +1053,67 @@ func (app *App) getModificationHistoryHandler(c *gin.Context) {
 	})
 }
 
+// errAmbiguousLegacyTags is returned when a history row written in the legacy
+// Go %v format cannot be mapped back to existing tags unambiguously.
+var errAmbiguousLegacyTags = errors.New("legacy tag history entry cannot be mapped to existing tags")
+
+// parseTagHistoryValue decodes tag lists stored in ModificationHistory.
+//
+// New rows are JSON (e.g. ["a","b"]) and decode exactly. Rows written before
+// the #842 fix used Go fmt.Sprintf("%v") syntax, e.g. "[Inbox Boîte de
+// réception]". That format joins names with spaces, so a name that itself
+// contains spaces cannot be split back reliably by whitespace alone — and undo
+// replaces the document's tags with the result, so a wrong split would remove
+// the real tag and, with CREATE_NEW_TAGS, create fragments like "Boîte" and
+// "de". Legacy rows are therefore resolved against knownTags: the tokens are
+// matched greedily, longest existing tag name first. If any part of the row
+// cannot be matched, errAmbiguousLegacyTags is returned and the caller refuses
+// the undo rather than guessing.
+func parseTagHistoryValue(s string, knownTags map[string]int) ([]string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []string{}, nil
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(s), &tags); err == nil {
+		if tags == nil {
+			return []string{}, nil
+		}
+		return tags, nil
+	}
+	inner := s
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		inner = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	if inner == "" {
+		return []string{}, nil
+	}
+	return resolveLegacyTagTokens(strings.Fields(inner), knownTags)
+}
+
+// resolveLegacyTagTokens reassembles space-separated tokens into existing tag
+// names, preferring the longest match at each position. It returns the stored
+// spelling of each tag, or errAmbiguousLegacyTags if a token cannot be covered.
+func resolveLegacyTagTokens(tokens []string, knownTags map[string]int) ([]string, error) {
+	var names []string
+	for i := 0; i < len(tokens); {
+		matched := false
+		for j := len(tokens); j > i; j-- {
+			candidate := strings.Join(tokens[i:j], " ")
+			if storedName, _, ok := lookupTagID(knownTags, candidate); ok {
+				names = append(names, storedName)
+				i = j
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("%w: no existing tag matches %q", errAmbiguousLegacyTags, tokens[i])
+		}
+	}
+	return names, nil
+}
+
 func (app *App) undoModificationHandler(c *gin.Context) {
 	id := c.Param("id")
 	modID, err := strconv.Atoi(id)
@@ -1080,8 +1167,18 @@ func (app *App) undoModificationHandler(c *gin.Context) {
 	case "title":
 		suggestion.SuggestedTitle = modification.PreviousValue
 	case "tags":
-		var tags []string
-		err := json.Unmarshal([]byte(modification.PreviousValue), &tags)
+		knownTags, err := app.Client.GetAllTags(ctx)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch tags"})
+			log.Errorf("Failed to fetch tags for undo: %v", err)
+			return
+		}
+		tags, err := parseTagHistoryValue(modification.PreviousValue, knownTags)
+		if errors.Is(err, errAmbiguousLegacyTags) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "This history entry was recorded in an older format and its tags cannot be restored reliably. Please restore the tags manually in paperless-ngx."})
+			log.Warnf("Refusing tag undo for modification %d: %v", modification.ID, err)
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to unmarshal previous tags"})
 			log.Errorf("Failed to unmarshal previous tags: %v", err)
