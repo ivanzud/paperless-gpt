@@ -96,7 +96,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	bodyBytes, err := io.ReadAll(req.Body)
-	req.Body.Close()
+	_ = req.Body.Close()
 	if err != nil {
 		// Body already partially consumed and unreadable: fail closed by
 		// returning the error rather than silently dropping the ZDR

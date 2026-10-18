@@ -128,7 +128,7 @@ func (client *PaperlessClient) FindDocumentIDsByReference(ctx context.Context, r
 			return nil, false, fmt.Errorf("HTTP request failed in FindDocumentIDsByReference: %w", err)
 		}
 		bodyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to read response body: %w", err)
 		}

@@ -55,7 +55,7 @@ func setupTestServerWithState() (*httptest.Server, *testServerState, func()) {
 			}
 			fileID := strings.TrimPrefix(r.URL.Path, "/v1/files/")
 			state.deletedFileIDs = append(state.deletedFileIDs, fileID)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":      fileID,
 				"object":  "file",
 				"deleted": true,

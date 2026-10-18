@@ -69,4 +69,4 @@ jobs:
         working-directory: ./web-app
         run: |
           OUTDIR="$(mktemp -d)"
-          npx --yes typedoc@0.28.18 --entryPointStrategy expand --out "$OUTDIR" src
+          npx --yes typedoc@0.28.18 --entryPointStrategy expand --exclude "**/*.test.ts" --out "$OUTDIR" src

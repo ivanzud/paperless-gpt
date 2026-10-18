@@ -150,7 +150,7 @@ func TestCreateLLMOllamaAppliesTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	start := time.Now()
-	_, err = model.Call(context.Background(), "Return a title")
+	_, err = model.Call(context.Background(), "Return a title") //nolint:staticcheck // exercises the deprecated Call path the client still implements
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "a stalled Ollama server must fail the call, not block the loop")

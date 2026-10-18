@@ -92,7 +92,7 @@ func TestCreateLLMOllamaSendsThinkAtTopLevel(t *testing.T) {
 
 			model, err := createLLM()
 			require.NoError(t, err)
-			_, err = model.Call(context.Background(), "Return a title")
+			_, err = model.Call(context.Background(), "Return a title") //nolint:staticcheck // exercises the deprecated Call path the client still implements
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.wantThink, request["think"],

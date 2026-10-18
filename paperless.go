@@ -1146,7 +1146,6 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			}
 			break
 		}
-		break
 	}
 
 	var firstPartial *PartialUpdateError
@@ -1841,7 +1840,7 @@ func writeOriginalImageAsPage(documentID int, docDir string, data []byte) (strin
 		return "", err
 	}
 	imagePath := filepath.Join(docDir, "page000.jpg")
-	if err := os.WriteFile(imagePath, jpegData, 0644); err != nil {
+	if err := os.WriteFile(imagePath, jpegData, 0600); err != nil {
 		return "", err
 	}
 	return imagePath, nil
@@ -2127,7 +2126,7 @@ func (client *PaperlessClient) DownloadDocumentAsPDF(ctx context.Context, docume
 	}
 	totalPages := doc.NumPages()
 	// Only the page count is needed here; free the PDFium instance early.
-	doc.Close()
+	_ = doc.Close()
 	pagesToProcess := totalPages
 
 	if limitPages > 0 && limitPages < totalPages {

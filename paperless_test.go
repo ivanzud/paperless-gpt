@@ -605,6 +605,52 @@ func TestUpdateDocuments(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// In a batch, the custom field types must be fetched as soon as any document
+// carries custom fields, not only when the first one does.
+func TestUpdateDocuments_NormalizesMonetaryWhenOnlyLaterDocumentHasCustomFields(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{"id":77,"name":"Amount","data_type":"monetary"}]}`))
+	})
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	var secondPatched bool
+	env.setMockResponse("/api/documents/2/", func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var payload struct {
+			CustomFields []CustomFieldResponse `json:"custom_fields"`
+		}
+		require.NoError(t, json.Unmarshal(bodyBytes, &payload))
+		require.Len(t, payload.CustomFields, 1)
+		assert.Equal(t, "USD1053.52", payload.CustomFields[0].Value)
+		secondPatched = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	documents := []DocumentSuggestion{
+		{ID: 1, OriginalDocument: Document{ID: 1, Title: "Letter"}, SuggestedTitle: "Letter from the bank"},
+		{
+			ID:                    2,
+			OriginalDocument:      Document{ID: 2, Title: "Invoice"},
+			CustomFieldsWriteMode: "replace",
+			SuggestedCustomFields: []CustomFieldSuggestion{{ID: 77, Name: "Amount", Value: "USD1,053.52"}},
+		},
+	}
+
+	err := env.client.UpdateDocuments(context.Background(), documents, env.db, false)
+	require.NoError(t, err)
+	require.True(t, secondPatched)
+}
+
 func TestUpdateDocuments_NormalizesMonetaryCustomFields(t *testing.T) {
 	env := newTestEnv(t)
 	defer env.teardown()
@@ -2161,16 +2207,16 @@ func TestCreatedDatePreValidation(t *testing.T) {
 	var receivedPatch map[string]interface{}
 	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			json.NewEncoder(w).Encode(GetDocumentApiResponse{
+			_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
 				ID: 1, Title: "Test Doc", Tags: []int{1}, Content: "content",
 			})
 			return
 		}
 		if r.Method == "PATCH" {
 			patchCalled = true
-			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&receivedPatch))
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": 1, "title": "Test Doc", "tags": []int{1},
 			})
 		}
@@ -2210,15 +2256,15 @@ func TestCreatedDateDotSeparatorIsNormalized(t *testing.T) {
 	var receivedPatch map[string]interface{}
 	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			json.NewEncoder(w).Encode(GetDocumentApiResponse{
+			_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
 				ID: 1, Title: "Test Doc", Tags: []int{1}, Content: "content",
 			})
 			return
 		}
 		if r.Method == "PATCH" {
-			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&receivedPatch))
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": 1, "title": "Test Doc", "tags": []int{1},
 			})
 		}
@@ -2254,7 +2300,7 @@ func TestUpdateDocuments_PreservesInvisibleTags(t *testing.T) {
 	// The API user can only see tag IDs 1 (autoTag) and 3 ("other-tag").
 	// Tag ID 99 exists on the document but is invisible to the API user.
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": autoTag},
 				{"id": 3, "name": "other-tag"},
@@ -2266,15 +2312,15 @@ func TestUpdateDocuments_PreservesInvisibleTags(t *testing.T) {
 	var receivedPatch map[string]interface{}
 	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			json.NewEncoder(w).Encode(GetDocumentApiResponse{
+			_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
 				ID: 1, Title: "Test Doc", Tags: []int{1, 99}, Content: "content",
 			})
 			return
 		}
 		if r.Method == "PATCH" {
-			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&receivedPatch))
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": 1, "title": "Test Doc", "tags": []int{3, 99},
 			})
 		}
@@ -2320,7 +2366,7 @@ func TestUpdateDocuments_PreservesTagThatBecameVisible(t *testing.T) {
 	// The catalog now knows tag 99, but the snapshot did not: the document's
 	// Tags carry no name for it.
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": autoTag},
 				{"id": 3, "name": "other-tag"},
@@ -2333,9 +2379,9 @@ func TestUpdateDocuments_PreservesTagThatBecameVisible(t *testing.T) {
 	var receivedPatch map[string]interface{}
 	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "PATCH" {
-			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&receivedPatch))
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
 		}
 	})
 
@@ -2869,14 +2915,14 @@ func TestUpdateDocuments_CustomFieldsMergeUsesCurrentState(t *testing.T) {
 			ctx := context.Background()
 
 			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"results": []map[string]interface{}{{"id": 1, "name": autoTag}},
 					"next":    nil,
 				})
 			})
 
 			env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"results": []map[string]interface{}{
 						{"id": 1, "name": "Haus", "data_type": "string"},
 						{"id": 7, "name": "Betrag", "data_type": "string"},
@@ -2889,7 +2935,7 @@ func TestUpdateDocuments_CustomFieldsMergeUsesCurrentState(t *testing.T) {
 			var receivedPatch map[string]interface{}
 			env.setMockResponse("/api/documents/460/", func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "GET" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
 						"id":            460,
 						"title":         "Test Doc",
 						"tags":          []int{1},
@@ -2899,9 +2945,9 @@ func TestUpdateDocuments_CustomFieldsMergeUsesCurrentState(t *testing.T) {
 					return
 				}
 				if r.Method == "PATCH" {
-					json.NewDecoder(r.Body).Decode(&receivedPatch)
+					assert.NoError(t, json.NewDecoder(r.Body).Decode(&receivedPatch))
 					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(map[string]interface{}{"id": 460})
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 460})
 				}
 			})
 
@@ -3000,14 +3046,14 @@ func TestUpdateDocuments_SkipsInvalidCustomFieldDate(t *testing.T) {
 			ctx := context.Background()
 
 			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"results": []map[string]interface{}{{"id": 1, "name": autoTag}},
 					"next":    nil,
 				})
 			})
 
 			env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"results": []map[string]interface{}{
 						{"id": 1, "name": "Amount", "data_type": "monetary"},
 						{"id": 2, "name": "Due Date", "data_type": "date"},
@@ -3021,7 +3067,7 @@ func TestUpdateDocuments_SkipsInvalidCustomFieldDate(t *testing.T) {
 			var receivedPatch map[string]interface{}
 			env.setMockResponse("/api/documents/9/", func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "GET" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
 						"id":            9,
 						"title":         "Test Doc",
 						"tags":          []int{1},
@@ -3033,7 +3079,7 @@ func TestUpdateDocuments_SkipsInvalidCustomFieldDate(t *testing.T) {
 				if r.Method == "PATCH" {
 					patchCount++
 					receivedPatch = nil
-					json.NewDecoder(r.Body).Decode(&receivedPatch)
+					assert.NoError(t, json.NewDecoder(r.Body).Decode(&receivedPatch))
 					// Reject an impossible date the way paperless-ngx does.
 					if fields, ok := receivedPatch["custom_fields"].([]interface{}); ok {
 						for i, raw := range fields {
@@ -3045,7 +3091,7 @@ func TestUpdateDocuments_SkipsInvalidCustomFieldDate(t *testing.T) {
 						}
 					}
 					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(map[string]interface{}{"id": 9})
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 9})
 				}
 			})
 
@@ -3091,14 +3137,14 @@ func TestUpdateDocuments_StripsCustomFieldRejectedByIndexKey(t *testing.T) {
 	ctx := context.Background()
 
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{{"id": 1, "name": autoTag}},
 			"next":    nil,
 		})
 	})
 
 	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 3, "name": "Pages", "data_type": "integer"},
 				{"id": 5, "name": "Document Number", "data_type": "string"},
@@ -3110,14 +3156,14 @@ func TestUpdateDocuments_StripsCustomFieldRejectedByIndexKey(t *testing.T) {
 	var patches []map[string]interface{}
 	env.setMockResponse("/api/documents/9/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": 9, "title": "Test Doc", "tags": []int{1}, "custom_fields": []interface{}{}, "content": "content",
 			})
 			return
 		}
 		if r.Method == "PATCH" {
 			var patch map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&patch)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&patch))
 			patches = append(patches, patch)
 			if fields, ok := patch["custom_fields"].([]interface{}); ok {
 				for i, raw := range fields {
@@ -3129,7 +3175,7 @@ func TestUpdateDocuments_StripsCustomFieldRejectedByIndexKey(t *testing.T) {
 				}
 			}
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": 9})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 9})
 		}
 	})
 
@@ -3172,14 +3218,14 @@ func TestUpdateDocuments_CustomFieldsMergeFailsWithoutCurrentState(t *testing.T)
 	ctx := context.Background()
 
 	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{{"id": 1, "name": autoTag}},
 			"next":    nil,
 		})
 	})
 
 	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"id": 1, "name": "Haus", "data_type": "string"},
 			},
@@ -3196,7 +3242,7 @@ func TestUpdateDocuments_CustomFieldsMergeFailsWithoutCurrentState(t *testing.T)
 		if r.Method == "PATCH" {
 			patchSent = true
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": 460})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 460})
 		}
 	})
 
@@ -3226,7 +3272,7 @@ func TestFindDocumentIDsByReference(t *testing.T) {
 		assert.Equal(t, "1", r.URL.Query().Get("page"))
 		assert.Equal(t, "id", r.URL.Query().Get("ordering"), "paging needs a fixed order")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"count": 5, "results": [
+		_, _ = w.Write([]byte(`{"count": 5, "results": [
 			{"id": 1, "content": "Rechnung R123 vom 01.09.2026"},
 			{"id": 2, "content": "Rechnung R1234 vom 02.09.2026"},
 			{"id": 3, "content": "Mahnung zu Rechnung r123."},
@@ -3264,7 +3310,7 @@ func referencePages(t *testing.T, env *testEnv, count int, pages map[string][]st
 		}
 		body, _ := json.Marshal(map[string]any{"count": count, "results": results})
 		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		_, _ = w.Write(body)
 	})
 }
 

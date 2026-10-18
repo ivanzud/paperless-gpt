@@ -158,6 +158,7 @@ func (app *App) workflowDefaultsHandler(c *gin.Context) {
 	base := globalAutoProcessingRequest(Document{})
 	prompts := map[string]string{}
 	for key, file := range workflowPromptFiles {
+		// #nosec G304 -- file comes from the fixed workflowPromptFiles map.
 		if content, err := os.ReadFile(filepath.Join("prompts", file)); err == nil {
 			prompts[key] = string(content)
 		}
