@@ -841,6 +841,9 @@ Each template has access to specific variables:
 **created_date_prompt.tmpl**:
 
 - `{{.Language}}` - Target language
+- `{{.Today}}` - Current date in YYYY-MM-DD format
+- `{{.Title}}` - Document title
+- `{{.OriginalFileName}}` - Original file name. The default prompt leaves it out: scanner and phone file names usually carry the scan date, which small models tend to return instead of the date printed in the document.
 - `{{.Content}}` - Document content text
 
 **custom_field_prompt.tmpl**:
