@@ -5,15 +5,13 @@ import (
 	"strings"
 )
 
+// protectedWorkflowTags lists every tag paperless-gpt manages itself. It defers
+// to systemTags so there is one source of truth: that set also covers each
+// configured workflow's trigger and completion tags, which must stay out of
+// the LLM's view just like the global ones, or suggesting one would send the
+// document straight back into that workflow's queue.
 func protectedWorkflowTags() []string {
-	return []string{
-		manualTag,
-		autoTag,
-		autoOcrTag,
-		pdfOCRCompleteTag,
-		failTag,
-		autoTagComplete,
-	}
+	return systemTags()
 }
 
 func isProtectedWorkflowTag(tagName string) bool {
@@ -38,15 +36,6 @@ func filterProtectedWorkflowTags(tags []string) []string {
 		}
 	}
 	return filteredTags
-}
-
-func findTagIDCaseInsensitive(tags map[string]int, tagName string) (string, int, bool) {
-	for availableTagName, tagID := range tags {
-		if strings.EqualFold(tagName, availableTagName) {
-			return availableTagName, tagID, true
-		}
-	}
-	return "", 0, false
 }
 
 func containsTagCaseInsensitive(tags []string, tagName string) bool {

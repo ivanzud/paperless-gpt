@@ -18,12 +18,14 @@ import {
   buildUpdatePayload,
   countChanges,
 } from "./review/fields";
+import { recordReviewDecision } from "./review/reviewSession";
 
 interface SuggestionsReviewProps {
   suggestions: DocumentSuggestion[];
   availableTags: TagOption[];
   filterTag: string | null;
   failedDocuments: SuggestionJobFailedDocument[];
+  reviewJobId: string | null;
   onRetryFailed: () => void;
   onFinished: (
     appliedCount: number,
@@ -40,6 +42,12 @@ interface UpdateDocumentsResponse {
     status: "applied" | "partial" | "failed";
     dropped_fields?: string[];
   }[];
+  /** The partially applied document, with the tag it was flagged with. */
+  partial?: {
+    document_id: number;
+    dropped_fields: string[];
+    fail_tag?: string;
+  };
 }
 
 const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
@@ -47,6 +55,7 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
   availableTags,
   filterTag,
   failedDocuments,
+  reviewJobId,
   onRetryFailed,
   onFinished,
   onDiscard,
@@ -151,6 +160,9 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
   const skippedCount = items.filter(
     (item) => decisions[item.id] === "skipped"
   ).length;
+  const discardedCount = items.filter(
+    (item) => decisions[item.id] === "discarded"
+  ).length;
 
   // Fire onFinished exactly once, from an effect (not inside a state updater,
   // which React may replay). It triggers when every item has been decided.
@@ -165,6 +177,17 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
     }
   }, [items, decisions, finishWithStats]);
 
+  const markApplied = (docId: number, fieldChanges: number) => {
+    statsRef.current.docs += 1;
+    statsRef.current.fields += fieldChanges;
+    setDecisions((prev) => ({ ...prev, [docId]: "applied" }));
+    if (reviewJobId) {
+      recordReviewDecision(localStorage, reviewJobId, docId, "applied");
+    }
+  };
+
+  // One request per document. A proxy that closes a long batch used to drop
+  // every success in that batch, and the next click sent those documents again.
   const applyDocuments = async (docsToApply: DocumentSuggestion[]) => {
     setError(null);
     setWarning(null);
@@ -177,16 +200,12 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
       return next;
     });
     try {
-      const appliedIds: number[] = [];
       const partialWarnings: string[] = [];
-      let appliedChanges = 0;
       let failedCount = 0;
 
       for (const item of docsToApply) {
-        const payload = buildUpdatePayload(
-          item,
-          excludedMap[item.id] || new Set()
-        );
+        const excluded = excludedMap[item.id] || new Set();
+        const payload = buildUpdatePayload(item, excluded);
         try {
           const response = await axios.patch<UpdateDocumentsResponse>(
             "./api/update-documents",
@@ -195,42 +214,40 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
           const outcome = response.data?.outcomes?.find(
             (candidate) => candidate.document_id === item.id
           );
-          const droppedFields =
-            outcome?.status === "partial" ? outcome.dropped_fields || [] : [];
+          const partial =
+            response.data?.partial?.document_id === item.id
+              ? response.data.partial
+              : undefined;
+          const isPartial = outcome?.status === "partial" || !!partial;
+          const droppedFields = isPartial
+            ? outcome?.dropped_fields || partial?.dropped_fields || []
+            : [];
 
-          appliedIds.push(item.id);
-          appliedChanges += Math.max(
-            0,
-            countChanges(item, excludedMap[item.id] || new Set()) -
-              droppedFields.length
+          // Fields paperless-ngx did not take are not counted as changes.
+          markApplied(
+            item.id,
+            Math.max(0, countChanges(item, excluded) - droppedFields.length)
           );
 
-          if (outcome?.status === "partial") {
+          if (isPartial) {
             const fields = droppedFields
               .map((field) => field.replace(/_/g, " "))
               .join(", ");
             partialWarnings.push(
-              `Document ${item.id} was saved, but ${fields || "some requested changes"} could not be applied. Review the document and its History entries.`
+              `Document ${item.id} was saved, but paperless-ngx did not take ${fields || "some requested changes"}` +
+                (partial?.fail_tag
+                  ? `; it was tagged "${partial.fail_tag}" for review.`
+                  : ". Review the document and its History entries.")
             );
           }
         } catch (err) {
+          // Keep going: one failed document must not hold back the rest.
           failedCount += 1;
           console.error(`Error updating document ${item.id}:`, err);
         }
       }
 
-      statsRef.current.docs += appliedIds.length;
-      statsRef.current.fields += appliedChanges;
       statsRef.current.warnings.push(...partialWarnings);
-
-      setDecisions((prev) => {
-        const next = { ...prev };
-        appliedIds.forEach((id) => {
-          next[id] = "applied";
-        });
-        return next;
-      });
-
       if (partialWarnings.length > 0) {
         setWarning(partialWarnings.join(" "));
       }
@@ -256,6 +273,29 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
 
   const handleSkip = (docId: number) => {
     setDecisions((prev) => ({ ...prev, [docId]: "skipped" as Decision }));
+    if (reviewJobId) {
+      recordReviewDecision(localStorage, reviewJobId, docId, "skipped");
+    }
+  };
+
+  // A workflow's held suggestions can be dropped: the document leaves the
+  // queue without anything written and without the completion tag.
+  const handleDiscardOne = async (docId: number) => {
+    setError(null);
+    setApplyingIds((prev) => new Set(prev).add(docId));
+    try {
+      await axios.post(`./api/reviews/${docId}/discard`);
+      setDecisions((prev) => ({ ...prev, [docId]: "discarded" }));
+    } catch (err) {
+      console.error("Error discarding suggestions:", err);
+      setError("Discarding failed — the document is still waiting. Try again.");
+    } finally {
+      setApplyingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(docId);
+        return next;
+      });
+    }
   };
 
   const handleDiscard = () => {
@@ -344,6 +384,7 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
             handlers={handlers}
             onApply={handleApplyOne}
             onSkip={handleSkip}
+            onDiscard={handleDiscardOne}
             onOpenFocus={() => setFocusIndex(index)}
             applying={applyingIds.has(item.id)}
           />
@@ -355,6 +396,7 @@ const SuggestionsReview: React.FC<SuggestionsReviewProps> = ({
           <p className="text-sm tabular-nums text-muted" role="status">
             {decidedCount} of {items.length} decided
             {skippedCount > 0 && ` · ${skippedCount} skipped`}
+            {discardedCount > 0 && ` · ${discardedCount} discarded`}
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={handleDiscard}>

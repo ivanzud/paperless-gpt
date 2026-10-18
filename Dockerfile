@@ -25,29 +25,23 @@ COPY web-app /app/
 RUN npm run build
 
 # Stage 2: Build the Go binary
-FROM docker.io/golang:1.25.13-alpine3.23@sha256:42fc3368d1c50170a452f2bf4a1dfd292a065870c3f258d799aad4316671cb69 AS builder
+FROM docker.io/golang:1.27.2-alpine3.24@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
 
 # Set the working directory inside the container
 WORKDIR /app
 
 # Package versions for Renovate
-# renovate: datasource=repology depName=alpine_3_23/gcc versioning=loose
-ENV GCC_VERSION="15.2.0-r2"
-# renovate: datasource=repology depName=alpine_3_23/musl-dev versioning=loose
-ENV MUSL_DEV_VERSION="1.2.5-r23"
-# renovate: datasource=repology depName=alpine_3_23/mupdf versioning=loose
-ENV MUPDF_VERSION="1.26.11-r0"
-# renovate: datasource=repology depName=alpine_3_23/mupdf-dev versioning=loose
-ENV MUPDF_DEV_VERSION="1.26.11-r0"
-# renovate: datasource=repology depName=alpine_3_23/sed versioning=loose
+# renovate: datasource=repology depName=alpine_3_24/gcc versioning=loose
+ENV GCC_VERSION="15.2.0-r5"
+# renovate: datasource=repology depName=alpine_3_24/musl-dev versioning=loose
+ENV MUSL_DEV_VERSION="1.2.6-r2"
+# renovate: datasource=repology depName=alpine_3_24/sed versioning=loose
 ENV SED_VERSION="4.9-r2"
 
 # Install necessary packages with pinned versions
 RUN apk add --no-cache \
     "gcc=${GCC_VERSION}" \
     "musl-dev=${MUSL_DEV_VERSION}" \
-    "mupdf=${MUPDF_VERSION}" \
-    "mupdf-dev=${MUPDF_DEV_VERSION}" \
     "sed=${SED_VERSION}"
 
 # Copy go.mod and go.sum files
@@ -84,7 +78,7 @@ RUN sed -i \
 RUN CGO_ENABLED=1 GOMAXPROCS=$(nproc) go build -tags musl -o paperless-gpt .
 
 # Stage 3: Create a lightweight image with just the binary
-FROM docker.io/alpine:3.24.1
+FROM docker.io/alpine:3.24.2
 
 ARG VERSION
 ARG COMMIT

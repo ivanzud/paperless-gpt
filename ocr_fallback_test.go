@@ -27,6 +27,14 @@ func (c *wholePDFFallbackClient) GetDocumentsByTag(ctx context.Context, tag stri
 	return nil, nil
 }
 
+func (c *wholePDFFallbackClient) FindDocumentIDsByReference(ctx context.Context, reference string, excludeID, maxMatches int) ([]int, bool, error) {
+	return nil, false, nil
+}
+
+func (c *wholePDFFallbackClient) UploadDocumentVersion(ctx context.Context, documentID int, data []byte, filename string, versionLabel string) (string, error) {
+	return "", nil
+}
+
 func (c *wholePDFFallbackClient) GetDocumentCountByTag(ctx context.Context, tag string) (int, error) {
 	return 0, nil
 }
