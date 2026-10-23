@@ -896,6 +896,7 @@ func (app *App) generateSingleDocumentSuggestion(ctx context.Context, suggestion
 			log.Errorf("Error generating correspondents for document %d: %v", documentID, err)
 			return DocumentSuggestion{}, fmt.Errorf("Document %d: %w", documentID, err)
 		}
+		suggestedCorrespondent = existingCorrespondentName(suggestedCorrespondent, generationContext.availableCorrespondentNames)
 	}
 
 	if suggestionRequest.GenerateDocumentTypes {
