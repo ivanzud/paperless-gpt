@@ -523,6 +523,12 @@ func (app *App) runWorkflowDocumentOCR(ctx context.Context, document Document, w
 		docLogger.Errorf("Workflow OCR processing failed: %v", err)
 		jobStore.updateJobStatus(jobID, "failed", err.Error())
 		finishOCRRunLogged(app, jobID, "failed", err.Error(), pagesDone, totalPages, "", "")
+		// Attempts against an unreachable provider don't count toward
+		// OCR_MAX_RETRIES, so a long outage records a failed run every poll
+		// cycle; prune them as the success path does.
+		if pruneErr := PruneOCRRuns(app.Database, document.ID); pruneErr != nil {
+			docLogger.Warnf("Failed to prune OCR runs: %v", pruneErr)
+		}
 
 		// Same rules as the auto-OCR poll: a shutdown or an unreachable
 		// provider doesn't count against the document.
@@ -689,6 +695,10 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			docLogger.Errorf("OCR processing failed: %v", err)
 			jobStore.updateJobStatus(jobID, "failed", err.Error())
 			finishOCRRunLogged(app, jobID, "failed", err.Error(), pagesDone, totalPages, "", "")
+			// Failed runs are pruned too (see the workflow OCR path).
+			if pruneErr := PruneOCRRuns(app.Database, document.ID); pruneErr != nil {
+				docLogger.Warnf("Failed to prune OCR runs: %v", pruneErr)
+			}
 
 			if ocrSkipFailedDocuments && ctx.Err() == nil {
 				reason := "OCR failed and OCR_SKIP_FAILED_DOCUMENTS is enabled"
