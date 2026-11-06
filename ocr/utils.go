@@ -24,6 +24,7 @@ var (
 func sanitizeOCRText(content string) string {
 	cleaned := textsanitize.StripReasoning(content)
 	cleaned = stripMarkdownCodeFences(cleaned)
+	cleaned = convertOCRHTML(cleaned)
 	cleaned = stripOCRFailureBoilerplate(cleaned)
 	cleaned = stripOCRChattyPrefixes(cleaned)
 	return strings.TrimSpace(cleaned)
