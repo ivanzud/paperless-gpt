@@ -341,6 +341,8 @@ func main() {
 		}
 	}
 
+	visionLlmFrequencyPenalty := parseVisionLLMFrequencyPenalty(os.Getenv("VISION_LLM_FREQUENCY_PENALTY"))
+
 	var ollamaOcrTopK *int
 	if topKStr := os.Getenv("OLLAMA_OCR_TOP_K"); topKStr != "" {
 		if parsed, err := strconv.Atoi(topKStr); err == nil {
@@ -397,35 +399,36 @@ func main() {
 	}
 
 	ocrConfig := ocr.Config{
-		Provider:                 providerType,
-		GoogleProjectID:          os.Getenv("GOOGLE_PROJECT_ID"),
-		GoogleLocation:           os.Getenv("GOOGLE_LOCATION"),
-		GoogleProcessorID:        os.Getenv("GOOGLE_PROCESSOR_ID"),
-		VisionLLMProvider:        visionLlmProvider,
-		VisionLLMModel:           visionLlmModel,
-		VisionLLMHost:            resolveVisionOllamaHost(),
-		VisionLLMThink:           resolveVisionOllamaThink(),
-		VisionLLMPrompt:          ocrPrompt,
-		AzureEndpoint:            azureDocAIEndpoint,
-		AzureAPIKey:              azureDocAIKey,
-		AzureModelID:             azureDocAIModelID,
-		AzureOutputContentFormat: AzureDocAIOutputContentFormat,
-		MistralAPIKey:            os.Getenv("MISTRAL_API_KEY"),
-		MistralModel:             os.Getenv("MISTRAL_MODEL"),
-		MistralImageLimit:        mistralImageLimit,
-		MistralImageMinSize:      mistralImageMinSize,
-		DoclingURL:               doclingURL,
-		DoclingImageExportMode:   doclingImageExportMode,
-		DoclingOCRPipeline:       doclingOCRPipeline,
-		DoclingOCREngine:         doclingOCREngine,
-		DoclingOutputFormat:      doclingOutputFormat,
-		EnableHOCR:               true, // Always generate hOCR struct if provider supports it
-		VisionLLMMaxTokens:       visionLlmMaxTokens,
-		VisionLLMTemperature:     visionLlmTemperature,
-		OllamaOcrTopK:            ollamaOcrTopK,
-		OllamaContextLength:      ollamaContextLength,
-		GoogleAIAPIKey:           os.Getenv("GOOGLEAI_API_KEY"),
-		GoogleAIThinkingBudget:   googleThinkingBudget,
+		Provider:                  providerType,
+		GoogleProjectID:           os.Getenv("GOOGLE_PROJECT_ID"),
+		GoogleLocation:            os.Getenv("GOOGLE_LOCATION"),
+		GoogleProcessorID:         os.Getenv("GOOGLE_PROCESSOR_ID"),
+		VisionLLMProvider:         visionLlmProvider,
+		VisionLLMModel:            visionLlmModel,
+		VisionLLMHost:             resolveVisionOllamaHost(),
+		VisionLLMThink:            resolveVisionOllamaThink(),
+		VisionLLMPrompt:           ocrPrompt,
+		AzureEndpoint:             azureDocAIEndpoint,
+		AzureAPIKey:               azureDocAIKey,
+		AzureModelID:              azureDocAIModelID,
+		AzureOutputContentFormat:  AzureDocAIOutputContentFormat,
+		MistralAPIKey:             os.Getenv("MISTRAL_API_KEY"),
+		MistralModel:              os.Getenv("MISTRAL_MODEL"),
+		MistralImageLimit:         mistralImageLimit,
+		MistralImageMinSize:       mistralImageMinSize,
+		DoclingURL:                doclingURL,
+		DoclingImageExportMode:    doclingImageExportMode,
+		DoclingOCRPipeline:        doclingOCRPipeline,
+		DoclingOCREngine:          doclingOCREngine,
+		DoclingOutputFormat:       doclingOutputFormat,
+		EnableHOCR:                true, // Always generate hOCR struct if provider supports it
+		VisionLLMMaxTokens:        visionLlmMaxTokens,
+		VisionLLMTemperature:      visionLlmTemperature,
+		VisionLLMFrequencyPenalty: visionLlmFrequencyPenalty,
+		OllamaOcrTopK:             ollamaOcrTopK,
+		OllamaContextLength:       ollamaContextLength,
+		GoogleAIAPIKey:            os.Getenv("GOOGLEAI_API_KEY"),
+		GoogleAIThinkingBudget:    googleThinkingBudget,
 	}
 
 	// Parse Azure timeout if set
@@ -856,6 +859,25 @@ func validateOCRProviderModeCompatibility(provider, mode, visionProvider string)
 }
 
 // validateOrDefaultEnvVars ensures all necessary environment variables are set
+// parseVisionLLMFrequencyPenalty reads VISION_LLM_FREQUENCY_PENALTY. Only a
+// finite, non-zero value in the OpenAI range [-2, 2] is used; anything else
+// leaves the parameter out of the request.
+func parseVisionLLMFrequencyPenalty(raw string) *float64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(parsed) || parsed < -2 || parsed > 2 {
+		log.Warnf("Invalid VISION_LLM_FREQUENCY_PENALTY value %q (expected a number between -2 and 2), ignoring", raw)
+		return nil
+	}
+	if parsed == 0 {
+		return nil
+	}
+	return &parsed
+}
+
 func validateOrDefaultEnvVars() {
 
 	if manualTag == "" {

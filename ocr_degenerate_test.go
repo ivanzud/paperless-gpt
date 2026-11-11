@@ -104,3 +104,14 @@ func TestProcessDocumentOCR_DegeneratePagePolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestParseVisionLLMFrequencyPenalty(t *testing.T) {
+	for _, raw := range []string{"", "   ", "0", "0.0", "abc", "NaN", "2.5", "-3", "Inf"} {
+		assert.Nil(t, parseVisionLLMFrequencyPenalty(raw), "%q must not set the parameter", raw)
+	}
+	for raw, want := range map[string]float64{"0.3": 0.3, " 1 ": 1, "-0.5": -0.5, "2": 2} {
+		got := parseVisionLLMFrequencyPenalty(raw)
+		require.NotNil(t, got, raw)
+		assert.InDelta(t, want, *got, 1e-9)
+	}
+}

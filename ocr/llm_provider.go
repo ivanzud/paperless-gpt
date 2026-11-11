@@ -38,8 +38,11 @@ type LLMProvider struct {
 	prompt      string
 	maxTokens   int
 	temperature *float64
-	ollamaTopK  *int
-	ollamaThink *bool
+	// frequencyPenalty is passed to providers that take an OpenAI-style
+	// frequency_penalty; nil sends nothing.
+	frequencyPenalty *float64
+	ollamaTopK       *int
+	ollamaThink      *bool
 }
 
 // WithPrompt returns a shallow copy of the provider with a different prompt.
@@ -92,14 +95,15 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 
 	logger.Info("Successfully initialized LLM OCR provider")
 	return &LLMProvider{
-		provider:    config.VisionLLMProvider,
-		model:       config.VisionLLMModel,
-		llm:         model,
-		prompt:      config.VisionLLMPrompt,
-		maxTokens:   config.VisionLLMMaxTokens,
-		temperature: config.VisionLLMTemperature,
-		ollamaTopK:  config.OllamaOcrTopK,
-		ollamaThink: config.VisionLLMThink,
+		provider:         config.VisionLLMProvider,
+		model:            config.VisionLLMModel,
+		llm:              model,
+		prompt:           config.VisionLLMPrompt,
+		maxTokens:        config.VisionLLMMaxTokens,
+		temperature:      config.VisionLLMTemperature,
+		frequencyPenalty: config.VisionLLMFrequencyPenalty,
+		ollamaTopK:       config.OllamaOcrTopK,
+		ollamaThink:      config.VisionLLMThink,
 	}, nil
 }
 
@@ -170,6 +174,9 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 	}
 	if p.temperature != nil {
 		callOpts = append(callOpts, llms.WithTemperature(*p.temperature))
+	}
+	if p.frequencyPenalty != nil {
+		callOpts = append(callOpts, llms.WithFrequencyPenalty(*p.frequencyPenalty))
 	}
 	if providerName == "ollama" && p.ollamaTopK != nil {
 		callOpts = append(callOpts, llms.WithTopK(*p.ollamaTopK))

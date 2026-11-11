@@ -48,6 +48,10 @@ type Config struct {
 	// Generic Vision LLM settings
 	VisionLLMMaxTokens   int
 	VisionLLMTemperature *float64
+	// VisionLLMFrequencyPenalty is sent as the OpenAI-style frequency_penalty
+	// when set. It discourages repetition loops, at the risk of damaging
+	// text that legitimately repeats (tables), so it is off by default.
+	VisionLLMFrequencyPenalty *float64
 
 	// Google AI (Gemini) settings
 	GoogleAIAPIKey         string

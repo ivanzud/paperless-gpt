@@ -142,6 +142,7 @@ type scriptedVisionLLM struct {
 	choices      []*llms.ContentChoice
 	calls        int
 	temperatures []float64
+	penalties    []float64
 }
 
 func (s *scriptedVisionLLM) GenerateContent(_ context.Context, _ []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
@@ -150,6 +151,7 @@ func (s *scriptedVisionLLM) GenerateContent(_ context.Context, _ []llms.MessageC
 		option(&opts)
 	}
 	s.temperatures = append(s.temperatures, opts.Temperature)
+	s.penalties = append(s.penalties, opts.FrequencyPenalty)
 	i := s.calls
 	s.calls++
 	if i >= len(s.choices) {
@@ -281,4 +283,21 @@ func TestProcessImage_RegeneratesDegenerateOutput(t *testing.T) {
 		require.NotNil(t, degenerate)
 		assert.Equal(t, DegenerateReasonCommentary, degenerate.Reason)
 	})
+}
+
+func TestProcessImage_FrequencyPenaltyIsOptIn(t *testing.T) {
+	good := &llms.ContentChoice{Content: "Acme\nPayment received, thank you.\nBalance 0.00", StopReason: "stop"}
+
+	llm := &scriptedVisionLLM{choices: []*llms.ContentChoice{good}}
+	_, err := retryTestProvider(llm).ProcessImage(context.Background(), testJPEG(t), 1)
+	require.NoError(t, err)
+	assert.Equal(t, []float64{0}, llm.penalties, "nothing is sent unless configured")
+
+	penalty := 0.4
+	llm = &scriptedVisionLLM{choices: []*llms.ContentChoice{good}}
+	provider := retryTestProvider(llm)
+	provider.frequencyPenalty = &penalty
+	_, err = provider.ProcessImage(context.Background(), testJPEG(t), 1)
+	require.NoError(t, err)
+	assert.Equal(t, []float64{0.4}, llm.penalties)
 }
