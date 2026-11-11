@@ -30,7 +30,8 @@ const (
 	// ... and at least half of the page (see hasRepetitionLoop).
 
 	// Symbol noise: runs of at least this many consecutive symbols that mix
-	// two or more characters other than table/ruler characters ...
+	// two or more characters other than table/ruler characters and form
+	// scaffolding (see isFormScaffolding) ...
 	degenerateMinNoiseRun = 5
 	// ... adding up to at least this many characters and this share of the page.
 	degenerateMinNoiseChars   = 24
@@ -233,10 +234,18 @@ func unitHasLetterOrDigit(unit []byte) bool {
 	return false
 }
 
+// isFormScaffolding reports characters that blank forms are drawn with next
+// to ruler characters: the brackets around a fill-in field such as `(___)`
+// or `[____]`, and pictographic symbols such as ballot boxes, check marks and
+// bullets. A row of them is a form, not noise.
+func isFormScaffolding(r rune) bool {
+	return strings.ContainsRune("()[]", r) || unicode.Is(unicode.So, r)
+}
+
 // hasSymbolNoise reports output that is to a relevant degree made of long
 // mixed-symbol runs such as `*+**+*+++*`. Runs made of one repeated character
-// (masked digits, dot leaders) and runs of table or ruler characters do not
-// count, whatever their length.
+// (masked digits, dot leaders), runs of table or ruler characters and runs of
+// form scaffolding do not count, whatever their length.
 func hasSymbolNoise(text string) (noiseChars int, found bool) {
 	total := 0
 	var run []rune
@@ -244,7 +253,7 @@ func hasSymbolNoise(text string) (noiseChars int, found bool) {
 		if len(run) >= degenerateMinNoiseRun {
 			distinct := map[rune]struct{}{}
 			for _, r := range run {
-				if !strings.ContainsRune(degenerateRulerCharacters, r) {
+				if !strings.ContainsRune(degenerateRulerCharacters, r) && !isFormScaffolding(r) {
 					distinct[r] = struct{}{}
 				}
 			}

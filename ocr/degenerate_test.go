@@ -58,6 +58,9 @@ func TestDegenerateOCRReason(t *testing.T) {
 		{name: "masked account digits and markdown emphasis", text: "**Account:** ************1234\n**Total:** $***.** (see ***note***)\nDue: --/--/----"},
 		{name: "several copies of the same form on one page", text: strings.Repeat(syntheticStatement(8)+"See notice on the back of copy B.\n", 4)},
 		{name: "some commentary next to a real transcription", text: syntheticStatement(10), commentaryChars: 60},
+		{name: "rating grid of ballot boxes", text: "Survey for Jane Doe\n\n" + strings.Repeat("Question | \u2610\u2610\u2611\u2610\u2610\n", 20)},
+		{name: "check mark and bullet rows", text: "Attendance\n" + strings.Repeat("\u2713\u2713\u2717\u2713\u2713\u25cf\u25cb\u25cb\n", 12)},
+		{name: "blank phone and date fields on a short form", text: "Contact form\nHome (___) ___-____\nWork (___) ___-____\nCell (___) ___-____\nFax (___) ___-____\nOther (___) ___-____\nDate [__/__/____]"},
 		{name: "wide table separator", text: "| a | b | c | d | e | f | g | h |\n|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |"},
 	}
 
