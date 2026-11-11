@@ -1096,7 +1096,45 @@ func marshalTagsForHistory(tags []string) string {
 	return string(b)
 }
 
-// UpdateDocuments updates the specified documents with suggested changes
+// currentDocumentTagIDs reads the tag IDs a document carries right now. It
+// asks for the tags only, so the request stays small no matter how long the
+// document's content is.
+func (client *PaperlessClient) currentDocumentTagIDs(ctx context.Context, documentID int) ([]int, error) {
+	path := fmt.Sprintf("api/documents/%d/?fields=id,tags", documentID)
+	resp, err := client.Do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("error fetching tags of document %d: %w", documentID, ErrDocumentNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("error fetching tags of document %d: status %d", documentID, resp.StatusCode)
+	}
+
+	var body struct {
+		Tags *[]int `json:"tags"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("error decoding tags of document %d: %w", documentID, err)
+	}
+	if body.Tags == nil {
+		return nil, fmt.Errorf("error fetching tags of document %d: response has no tags", documentID)
+	}
+	return *body.Tags, nil
+}
+
+// UpdateDocuments updates the specified documents with suggested changes.
+//
+// Tags are a read-modify-write: paperless-ngx only accepts the complete tag
+// list, so the list sent is the document's tags plus and minus what this
+// update asks for. The tags in a suggestion's OriginalDocument can be many
+// minutes old by the time the update runs (a batch is listed once and then
+// processed document by document), so they are read again here. Tags that
+// another client or a user added or removed in the meantime are then kept as
+// they are instead of being silently reverted.
 func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []DocumentSuggestion, db *gorm.DB, isUndo bool) error {
 	availableTags, err := client.GetAllTags(ctx)
 	if err != nil {
@@ -1153,6 +1191,14 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 	for _, document := range documents {
 		documentID := document.ID
 		originalDoc := document.OriginalDocument
+		if tagIDs, err := client.currentDocumentTagIDs(ctx, documentID); err != nil {
+			// Not being able to read the document is no reason to drop the
+			// update: fall back to the snapshot, as before.
+			log.Warnf("Document %d: could not re-read its current tags, using the tags from when it was fetched: %v", documentID, err)
+		} else {
+			originalDoc.TagIDs = tagIDs
+			originalDoc.Tags, _ = resolveTagNames(tagIDs, availableTags)
+		}
 		updatedFields := make(map[string]interface{})
 		originalFields := make(map[string]interface{})
 		var partialDroppedFields []string

@@ -30,6 +30,26 @@ type testEnv struct {
 	requestCount  int
 	mockResponses map[string]http.HandlerFunc
 	db            *gorm.DB
+	// currentTags answers the tag re-read UpdateDocuments does before it
+	// writes tags (GET /api/documents/<id>/?fields=id,tags), keyed by
+	// document ID. A document without an entry answers 404, which makes
+	// UpdateDocuments fall back to the tags of the snapshot it was given;
+	// that is what tests written against a snapshot expect.
+	currentTags map[int][]int
+	// tagReReads counts those requests per document ID.
+	tagReReads map[int]int
+}
+
+// isTagReRead reports whether r is the tag re-read of UpdateDocuments and,
+// if so, for which document.
+func isTagReRead(r *http.Request) (documentID int, ok bool) {
+	if r.Method != http.MethodGet || r.URL.Query().Get("fields") != "id,tags" {
+		return 0, false
+	}
+	if _, err := fmt.Sscanf(r.URL.Path, "/api/documents/%d/", &documentID); err != nil {
+		return 0, false
+	}
+	return documentID, true
 }
 
 // newTestEnv initializes a new test environment
@@ -37,6 +57,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	env := &testEnv{
 		t:             t,
 		mockResponses: make(map[string]http.HandlerFunc),
+		currentTags:   make(map[int][]int),
+		tagReReads:    make(map[int]int),
 	}
 
 	// Initialize test database
@@ -46,6 +68,17 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// Create a mock server with a handler that dispatches based on URL path
 	env.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if documentID, ok := isTagReRead(r); ok {
+			env.tagReReads[documentID]++
+			tags, known := env.currentTags[documentID]
+			if !known {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": documentID, "tags": tags})
+			return
+		}
 		env.requestCount++
 		handler, exists := env.mockResponses[r.URL.Path]
 		if !exists {
