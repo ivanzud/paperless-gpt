@@ -204,6 +204,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 	var totalPdfPages int
 	var imagePaths []string
 	var failedPages []int
+	var noText noTextPages
 
 	// Default process mode to app's ocrProcessMode if not set in options
 	processMode = options.ProcessMode
@@ -328,6 +329,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			result, err, skipDegenerate := applyDegeneratePagePolicy(result, err, pageLogger)
 			if err != nil {
 				if skipFailedOCRPage(err, skipDegenerate, pageLogger) {
+					noText.note(err, skipDegenerate)
 					failedPages = append(failedPages, i+1)
 					if jobID != "" {
 						jobStore.updatePagesDone(jobID, i+1)
@@ -469,6 +471,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 				result, err, skipDegenerate = applyDegeneratePagePolicy(result, err, pageLogger)
 				if err != nil {
 					if skipFailedOCRPage(err, skipDegenerate, pageLogger) {
+						noText.note(err, skipDegenerate)
 						failedPages = append(failedPages, i+1)
 						if jobID != "" {
 							jobStore.updatePagesDone(jobID, i+1)
@@ -536,7 +539,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		}).Warn("OCR completed with failed pages")
 	}
 	if len(ocrTexts) == 0 {
-		return nil, fmt.Errorf("OCR failed for all processed pages for document %d", documentID)
+		return nil, allPagesFailedError(documentID, failedPages, noText)
 	}
 
 	fullText := strings.Join(ocrTexts, "\n\n")
@@ -1040,14 +1043,22 @@ func applyDegeneratePagePolicy(result *ocr.OCRResult, err error, logger *logrus.
 
 // skipFailedOCRPage reports whether a page whose OCR call failed is left out
 // of the document instead of failing it. skipDegenerate is the verdict of
-// applyDegeneratePagePolicy. Without it a degenerate page is never skipped:
+// applyDegeneratePagePolicy. Without it a degenerate page is skipped only if
+// the model found no text on it at all (ocr.DegenerateOutputError.NoText):
 // OCR_SKIP_FAILED_PAGES is for pages without text, not for pages with garbage.
 func skipFailedOCRPage(err error, skipDegenerate bool, logger *logrus.Entry) bool {
 	if skipDegenerate {
 		return true
 	}
-	if !ocrSkipFailedPages || ocr.AsDegenerateOutput(err) != nil {
+	if !ocrSkipFailedPages {
 		return false
+	}
+	if degenerate := ocr.AsDegenerateOutput(err); degenerate != nil {
+		if !degenerate.NoText {
+			return false
+		}
+		logger.Warn("Vision model found no text on this page; skipping it due to OCR_SKIP_FAILED_PAGES")
+		return true
 	}
 	logger.WithError(err).Warn("OCR failed for page; skipping due to OCR_SKIP_FAILED_PAGES")
 	return true
@@ -1063,6 +1074,39 @@ func degenerateResultForReview(result *ocr.OCRResult, err error, what string) (*
 		return degenerate.Result, nil
 	}
 	return result, err
+}
+
+// noTextPages counts the pages that OCR_SKIP_FAILED_PAGES left out because
+// the model found no text on them (see skipFailedOCRPage), and keeps the
+// first of those rejections.
+type noTextPages struct {
+	count int
+	first error
+}
+
+// note records the error of a page that skipFailedOCRPage left out, if it was
+// left out as a page without text. A page that OCR_DEGENERATE_PAGE_ACTION=skip
+// left out (skipDegenerate) is not counted.
+func (n *noTextPages) note(err error, skipDegenerate bool) {
+	if degenerate := ocr.AsDegenerateOutput(err); skipDegenerate || degenerate == nil || !degenerate.NoText {
+		return
+	}
+	n.count++
+	if n.first == nil {
+		n.first = err
+	}
+}
+
+// allPagesFailedError is the error for a document none of whose pages
+// produced text. If every one of them was left out because the model found no
+// text on it, the error stays a degenerate-output error: running the document
+// again would buy the same answer, so the callers give up on it at once, as
+// they do when such a page fails the document directly (see ocrGiveUpReason).
+func allPagesFailedError(documentID int, failedPages []int, noText noTextPages) error {
+	if noText.count > 0 && noText.count == len(failedPages) {
+		return fmt.Errorf("OCR failed for all processed pages for document %d: %w", documentID, noText.first)
+	}
+	return fmt.Errorf("OCR failed for all processed pages for document %d", documentID)
 }
 
 // ocrFailureCounts reports whether a failed OCR run counts against the

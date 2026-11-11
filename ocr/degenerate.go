@@ -59,6 +59,13 @@ type DegenerateOutputError struct {
 	// Result is the rejected result. It lets a caller that reviews pages
 	// interactively, or that is configured to accept such output, still use it.
 	Result *OCRResult
+	// NoText says that every attempt answered with nothing but a complete
+	// remark about legibility, without one transcribed letter or digit and
+	// without running into the token limit: the model found no
+	// text on the page, as on the blank back of a duplex scan. Such a page is
+	// a page without text rather than a page with garbage, so a caller that
+	// leaves pages without text out may leave it out as well.
+	NoText bool
 }
 
 func (e *DegenerateOutputError) Error() string {

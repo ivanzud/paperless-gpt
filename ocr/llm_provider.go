@@ -220,6 +220,9 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		degenerateRetryTemperature = &v
 	}
 
+	// Stays true while every answer so far was a legibility remark and nothing
+	// else (see DegenerateOutputError.NoText).
+	noText := true
 	for attempt := 0; ; attempt++ {
 		opts := callOpts
 		if attempt > 0 && degenerateRetryTemperature != nil {
@@ -236,6 +239,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 			logger.WithField("content_length", len(result.Text)).WithFields(generationInfoLogFields(completion.Choices[0].GenerationInfo)).Info("Successfully processed image")
 			return result, nil
 		}
+		noText = noText && reason == DegenerateReasonCommentary && !result.OcrLimitHit && countLettersAndDigits(result.Text) == 0
 		degenerateLogger := logger.WithFields(logrus.Fields{
 			"reason":         reason,
 			"detail":         detail,
@@ -243,8 +247,8 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 			"stop_reason":    completion.Choices[0].StopReason,
 		})
 		if attempt >= degenerateRetries {
-			degenerateLogger.Warn("Vision model returned degenerate output for this page; rejecting it")
-			return nil, &DegenerateOutputError{Reason: reason, Detail: detail, Result: result}
+			degenerateLogger.WithField("no_text", noText).Warn("Vision model returned degenerate output for this page; rejecting it")
+			return nil, &DegenerateOutputError{Reason: reason, Detail: detail, Result: result, NoText: noText}
 		}
 		degenerateLogger.Warnf("Vision model returned degenerate output for this page; regenerating (attempt %d/%d)", attempt+1, degenerateRetries)
 	}

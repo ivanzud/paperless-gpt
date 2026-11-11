@@ -341,14 +341,55 @@ func TestProcessImage_RegeneratesDegenerateOutput(t *testing.T) {
 		assert.Equal(t, []float64{0, 0.3}, llm.temperatures)
 	})
 
-	t.Run("commentary instead of a transcription is rejected", func(t *testing.T) {
-		commentary := &llms.ContentChoice{Content: "[The text on this page is extremely faint and largely illegible. It appears to be a letter.]\n<|im_end|>\n|im_end|>", StopReason: "stop"}
-		llm := &scriptedVisionLLM{choices: []*llms.ContentChoice{commentary}}
-		_, err := retryTestProvider(llm).ProcessImage(context.Background(), testJPEG(t), 1)
+	remark := "[The text on this page is extremely faint and largely illegible. It appears to be a letter.]"
+	said := func(content string) *llms.ContentChoice {
+		return &llms.ContentChoice{Content: content, StopReason: "stop"}
+	}
+	noTextCases := []struct {
+		name       string
+		answers    []*llms.ContentChoice
+		retries    string
+		wantReason string
+		wantNoText bool
+		wantCalls  int
+	}{
+		{name: "nothing but a legibility remark is a page without text", answers: []*llms.ContentChoice{said(remark + "\n<|im_end|>\n|im_end|>")}, wantNoText: true, wantCalls: 2},
+		{name: "a remark with a punctuation leftover is a page without text", answers: []*llms.ContentChoice{said(remark + "\n---")}, wantNoText: true, wantCalls: 2},
+		{name: "a single attempt is enough when regeneration is disabled", answers: []*llms.ContentChoice{said(remark)}, retries: "0", wantNoText: true, wantCalls: 1},
+		{name: "a remark next to a scrap of text is not", answers: []*llms.ContentChoice{said(remark + "\nPage 2")}, wantCalls: 2},
+		{name: "a remark after an attempt that produced text is not", answers: []*llms.ContentChoice{loop, said(remark)}, wantCalls: 2},
+		{name: "a remark that was cut off at the token limit is not", answers: []*llms.ContentChoice{{Content: remark, StopReason: "length"}}, wantCalls: 2},
+		{name: "a remark before an empty table cut off at the token limit is not", answers: []*llms.ContentChoice{said(remark), {Content: "| | |\n|---|---|", StopReason: "length"}}, wantReason: DegenerateReasonTokenLimit, wantCalls: 2},
+		{name: "a remark before symbol noise is not", answers: []*llms.ContentChoice{said(remark), said(strings.Repeat("*+#*+%&", 40))}, wantReason: DegenerateReasonNoise, wantCalls: 2},
+		{name: "a description of the picture is not", answers: []*llms.ContentChoice{said("The image shows a blank sheet of paper with a slight shadow along the left edge.")}, wantCalls: 2},
+	}
+	for _, tc := range noTextCases {
+		t.Run("commentary is rejected: "+tc.name, func(t *testing.T) {
+			if tc.retries != "" {
+				t.Setenv("OCR_DEGENERATE_RETRIES", tc.retries)
+			}
+			wantReason := tc.wantReason
+			if wantReason == "" {
+				wantReason = DegenerateReasonCommentary
+			}
+			llm := &scriptedVisionLLM{choices: tc.answers}
+			result, err := retryTestProvider(llm).ProcessImage(context.Background(), testJPEG(t), 1)
 
-		degenerate := AsDegenerateOutput(err)
-		require.NotNil(t, degenerate)
-		assert.Equal(t, DegenerateReasonCommentary, degenerate.Reason)
+			assert.Nil(t, result)
+			degenerate := AsDegenerateOutput(err)
+			require.NotNil(t, degenerate)
+			assert.Equal(t, wantReason, degenerate.Reason)
+			assert.Equal(t, tc.wantNoText, degenerate.NoText)
+			assert.Equal(t, tc.wantCalls, llm.calls)
+		})
+	}
+
+	t.Run("a transcription after a legibility remark is used", func(t *testing.T) {
+		llm := &scriptedVisionLLM{choices: []*llms.ContentChoice{{Content: remark, StopReason: "stop"}, good}}
+		result, err := retryTestProvider(llm).ProcessImage(context.Background(), testJPEG(t), 1)
+
+		require.NoError(t, err)
+		assert.Equal(t, "Acme\nPayment received, thank you.\nBalance 0.00", result.Text)
 	})
 }
 
