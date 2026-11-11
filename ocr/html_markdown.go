@@ -13,13 +13,108 @@ import (
 // (Surya, LightOnOCR) wrap their transcription in. Plain-text or Markdown
 // output without these tags is passed through untouched, so a stray "<" in a
 // recognized document ("<5% APR") is never mistaken for markup.
-var ocrHTMLTagPattern = regexp.MustCompile(`(?i)</?(?:p|br|table|thead|tbody|tr|td|th|h[1-6]|ul|ol|li|b|strong|i|em|u|img|input|a|div|span|sup|sub)(?:\s[^<>]*)?/?>`)
+var ocrHTMLTagPattern = regexp.MustCompile(`(?i)</?(?:p|br|hr|table|thead|tbody|tfoot|tr|td|th|caption|h[1-6]|ul|ol|li|dl|dt|dd|b|strong|i|em|u|img|input|a|div|span|label|sup|sub|section|article|header|footer|address|blockquote|pre|figure|figcaption)(?:\s[^<>]*)?/?>`)
 
 var (
 	ocrBlankLineRun    = regexp.MustCompile(`\n{3,}`)
 	ocrMarkdownTableBr = regexp.MustCompile(`(?im)^(\s*\|.*)$`)
 	ocrBrTag           = regexp.MustCompile(`(?i)<br\s*/?>`)
+
+	// ocrTagCandidate matches what the HTML tokenizer would read as a tag at
+	// the start of the input; the first group is the element name.
+	ocrTagCandidate = regexp.MustCompile(`^</?([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?/?>`)
+	// ocrSemicolonEntity matches a character reference that is terminated
+	// properly, the only kind that is safe to decode in plain text
+	// ("?a=1&copy=2" in a printed URL is not an entity).
+	ocrSemicolonEntity = regexp.MustCompile(`&(?:[A-Za-z][A-Za-z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6});`)
+	ocrTableTag        = regexp.MustCompile(`(?i)<table[\s>]`)
+	ocrOrphanRowOpen   = regexp.MustCompile(`(?i)<(?:thead|tbody|tfoot|tr|td|th)(?:\s[^<>]*)?>`)
+	ocrOrphanRowClose  = regexp.MustCompile(`(?i)</(?:thead|tbody|tfoot|tr|td|th)\s*>`)
 )
+
+// ocrKnownHTMLElements are the element names accepted as markup without
+// further evidence. Anything else in angle brackets is only a tag when the
+// output also contains its counterpart (see escapeNonTagAngleBrackets).
+var ocrKnownHTMLElements = map[string]bool{}
+
+func init() {
+	for _, name := range strings.Fields(`
+		html head body p br hr div span table thead tbody tfoot tr td th caption colgroup col
+		h1 h2 h3 h4 h5 h6 ul ol li dl dt dd b strong i em u s strike del ins mark small big
+		sub sup code pre kbd samp var tt q cite abbr blockquote a img input label form
+		fieldset legend select option button section article header footer main nav aside
+		address figure figcaption picture center font math script style details summary
+		time wbr nobr`) {
+		ocrKnownHTMLElements[name] = true
+	}
+}
+
+// ocrInlineMarkerElements are one-letter inline elements whose closing tag
+// HTML never lets an author omit. A lone "<A>" or "<B>" without attributes
+// and without any closing tag is therefore printed text (receipts mark tax
+// classes that way), not markup.
+var ocrInlineMarkerElements = map[string]bool{"a": true, "b": true, "i": true, "u": true, "s": true, "q": true}
+
+// escapeNonTagAngleBrackets turns every "<" that does not start real markup
+// into "&lt;", so the HTML parser keeps it as text. Without this, printed
+// text such as "<jane@example.com>" is parsed as an unknown element and
+// dropped, and "balance<minimum ..." swallows the rest of its paragraph as
+// the attributes of a tag that never closes.
+func escapeNonTagAngleBrackets(content string) string {
+	if !strings.Contains(content, "<") {
+		return content
+	}
+	lower := strings.ToLower(content)
+	var sb strings.Builder
+	sb.Grow(len(content) + 16)
+	for i := 0; i < len(content); i++ {
+		if content[i] != '<' || strings.HasPrefix(content[i:], "<!--") || isOCRMarkupAt(content, lower, i) {
+			sb.WriteByte(content[i])
+			continue
+		}
+		sb.WriteString("&lt;")
+	}
+	return sb.String()
+}
+
+func isOCRMarkupAt(content, lower string, i int) bool {
+	m := ocrTagCandidate.FindStringSubmatch(content[i:])
+	if m == nil {
+		return false
+	}
+	name := strings.ToLower(m[1])
+	closing := strings.HasPrefix(m[0], "</")
+	if ocrKnownHTMLElements[name] {
+		if !closing && ocrInlineMarkerElements[name] && m[0] == content[i:i+len(name)+2] {
+			return strings.Contains(lower, "</"+name+">")
+		}
+		return true
+	}
+	// An unknown element is still markup when the model both opens and
+	// closes it; its tags are dropped and its text kept, as before.
+	if closing {
+		return strings.Contains(lower, "<"+name+">") || strings.Contains(lower, "<"+name+" ")
+	}
+	return strings.Contains(lower, "</"+name+">") || strings.HasSuffix(m[0], "/>")
+}
+
+// wrapOrphanTableRows puts table rows that arrive without a <table> around
+// them into one. The HTML parser discards row and cell tags outside a table,
+// which would glue all cell texts together.
+func wrapOrphanTableRows(content string) string {
+	if ocrTableTag.MatchString(content) {
+		return content
+	}
+	open := ocrOrphanRowOpen.FindStringIndex(content)
+	if open == nil {
+		return content
+	}
+	end := len(content)
+	if closes := ocrOrphanRowClose.FindAllStringIndex(content, -1); len(closes) > 0 && closes[len(closes)-1][1] > open[0] {
+		end = closes[len(closes)-1][1]
+	}
+	return content[:open[0]] + "<table>" + content[open[0]:end] + "</table>" + content[end:]
+}
 
 // convertOCRHTML rewrites HTML OCR output as the plain text and Markdown
 // tables paperless-ngx stores, so document content, full-text search and the
@@ -29,8 +124,12 @@ var (
 // transcribe it; text printed inside images is kept.
 func convertOCRHTML(content string) string {
 	if !ocrHTMLTagPattern.MatchString(content) {
-		return content
+		// No markup, but a model that writes HTML may still have escaped the
+		// text ("AT&amp;T").
+		return ocrSemicolonEntity.ReplaceAllStringFunc(content, html.UnescapeString)
 	}
+	content = escapeNonTagAngleBrackets(content)
+	content = wrapOrphanTableRows(content)
 
 	// A <br> inside a Markdown table row would split the row once parsed, so
 	// those become spaces before the HTML parser sees them.
@@ -62,6 +161,9 @@ type ocrMarkdownWriter struct {
 	// afterCheckbox swallows the space a model types after a checkbox, since
 	// the marker already ends in one.
 	afterCheckbox bool
+	// afterFragment is set right after a <span> or <label> closes, so the
+	// next one that follows without any text in between gets a separator.
+	afterFragment bool
 }
 
 // block starts a new paragraph unless the output already ends with one.
@@ -78,6 +180,8 @@ func (w *ocrMarkdownWriter) block() {
 }
 
 func (w *ocrMarkdownWriter) node(n *html.Node) {
+	afterFragment := w.afterFragment
+	w.afterFragment = false
 	switch n.Type {
 	case html.TextNode:
 		text := n.Data
@@ -102,8 +206,19 @@ func (w *ocrMarkdownWriter) node(n *html.Node) {
 		marker := checkboxMarker(n)
 		w.sb.WriteString(marker)
 		w.afterCheckbox = marker != ""
+	case atom.Hr:
+		w.block()
 	case atom.Table:
 		w.block()
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type != html.ElementNode || c.DataAtom != atom.Caption {
+				continue
+			}
+			if caption := strings.TrimSpace(inlineText(c)); caption != "" {
+				w.sb.WriteString(caption)
+				w.block()
+			}
+		}
 		w.sb.WriteString(renderOCRTable(n))
 		w.block()
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
@@ -119,15 +234,40 @@ func (w *ocrMarkdownWriter) node(n *html.Node) {
 		w.sb.WriteString("- ")
 		w.sb.WriteString(strings.TrimSpace(inlineText(n)))
 		w.sb.WriteString("\n")
-	case atom.P, atom.Div, atom.Ul, atom.Ol, atom.Thead, atom.Tbody:
+	case atom.P, atom.Div, atom.Ul, atom.Ol, atom.Thead, atom.Tbody,
+		atom.Section, atom.Article, atom.Header, atom.Footer, atom.Main, atom.Nav, atom.Aside,
+		atom.Address, atom.Blockquote, atom.Pre, atom.Dl, atom.Figure, atom.Figcaption,
+		atom.Form, atom.Fieldset, atom.Details, atom.Summary, atom.Center, atom.Caption:
 		if hasClass(n, "img-desc") {
 			return
 		}
 		w.block()
 		w.children(n)
 		w.block()
+	case atom.Dt, atom.Dd, atom.Legend:
+		// Terms and their values are separate lines, not separate paragraphs.
+		w.line()
+		w.children(n)
+		w.line()
+	case atom.Span, atom.Label:
+		// Two fragments marked up one right after the other are two pieces
+		// of text; without a separator they would read as one word.
+		if afterFragment {
+			if s := w.sb.String(); s != "" && !strings.HasSuffix(s, " ") && !strings.HasSuffix(s, "\n") {
+				w.sb.WriteString(" ")
+			}
+		}
+		w.children(n)
+		w.afterFragment = true
 	default:
 		w.children(n)
+	}
+}
+
+// line moves to the start of a new line unless the output is already there.
+func (w *ocrMarkdownWriter) line() {
+	if s := w.sb.String(); s != "" && !strings.HasSuffix(s, "\n") {
+		w.sb.WriteString("\n")
 	}
 }
 
@@ -172,6 +312,10 @@ func renderOCRTable(table *html.Node) string {
 	for _, tr := range descendants(table, atom.Tr) {
 		var row []*ocrTableCell
 		col := 0
+		// Rowspans opened in this row only cover the rows below it. Keeping
+		// them apart until the row is done stops a parent cell's own ghost
+		// cells from being mistaken for covered columns.
+		opened := map[int]int{}
 		skipCovered := func() {
 			for pending[col] > 0 {
 				pending[col]--
@@ -183,9 +327,17 @@ func renderOCRTable(table *html.Node) string {
 			if c.Type != html.ElementNode || (c.DataAtom != atom.Td && c.DataAtom != atom.Th) {
 				continue
 			}
+			ghost := attr(c, "data-kind") == "ghost"
+			if ghost && pending[col] > 0 {
+				// The model spelled out a slot that a rowspan above already
+				// covers: the ghost is that slot, not an extra column.
+				pending[col]--
+				row = append(row, &ocrTableCell{header: c.DataAtom == atom.Th})
+				col++
+				continue
+			}
 			skipCovered()
 			cell := &ocrTableCell{header: c.DataAtom == atom.Th}
-			ghost := attr(c, "data-kind") == "ghost"
 			if !ghost {
 				cell.text = cellText(c)
 			}
@@ -204,12 +356,15 @@ func renderOCRTable(table *html.Node) string {
 			}
 			if rowspan > 1 {
 				for i := 0; i < colspan; i++ {
-					pending[col+i] = rowspan - 1
+					opened[col+i] = rowspan - 1
 				}
 			}
 			col += 1 + pad
 		}
 		skipCovered()
+		for c, n := range opened {
+			pending[c] = n
+		}
 		// Blank form lines carry no text; keep the header row so the table
 		// still has one.
 		if len(row) > 0 && (len(rows) == 0 || !emptyRow(row)) {
