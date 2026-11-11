@@ -4,7 +4,7 @@ ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
 # Stage 1: Build Vite frontend
-FROM docker.io/node:24-alpine AS frontend
+FROM docker.io/node:24.22.2-alpine3.24 AS frontend
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -78,7 +78,7 @@ RUN sed -i \
 RUN CGO_ENABLED=1 GOMAXPROCS=$(nproc) go build -tags musl -o paperless-gpt .
 
 # Stage 3: Create a lightweight image with just the binary
-FROM docker.io/alpine:3.24.2
+FROM docker.io/alpine:3.24.4
 
 ARG VERSION
 ARG COMMIT
