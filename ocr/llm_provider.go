@@ -226,7 +226,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		}
 		result, reason, detail := p.resultFromCompletion(completion, logger)
 		if reason == "" {
-			logger.WithField("content_length", len(result.Text)).WithFields(completion.Choices[0].GenerationInfo).Info("Successfully processed image")
+			logger.WithField("content_length", len(result.Text)).WithFields(generationInfoLogFields(completion.Choices[0].GenerationInfo)).Info("Successfully processed image")
 			return result, nil
 		}
 		degenerateLogger := logger.WithFields(logrus.Fields{
@@ -327,6 +327,26 @@ func (p *LLMProvider) resultFromCompletion(completion *llms.ContentResponse, log
 	}
 	reason, detail = degenerateOCRReason(text, commentaryChars, limitHit)
 	return result, reason, detail
+}
+
+// generationInfoLogFields turns a provider's generation metadata into log
+// fields that cannot carry document text. Counters, flags and durations are
+// kept; a string value (reasoning or thinking content is model output about
+// the page) is replaced by its length, and nested values are dropped.
+func generationInfoLogFields(genInfo map[string]any) logrus.Fields {
+	fields := make(logrus.Fields, len(genInfo))
+	for key, value := range genInfo {
+		switch v := value.(type) {
+		case nil:
+		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, time.Duration:
+			fields[key] = v
+		case string:
+			if v != "" {
+				fields[key+"_length"] = len(v)
+			}
+		}
+	}
+	return fields
 }
 
 // isLengthStopReason reports whether a provider's stop reason means the

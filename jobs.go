@@ -58,6 +58,21 @@ func init() {
 	logger.WithField("prefix", "OCR_JOB")
 }
 
+// jobLogFields describes a job for the log without its content. A job
+// carries the document's text (the OCR result, and any existing content
+// passed in its options), which must not end up in the application log at
+// the default level: only the length of the result is reported.
+func jobLogFields(job *Job) logrus.Fields {
+	return logrus.Fields{
+		"job_id":        job.ID,
+		"document_id":   job.DocumentID,
+		"status":        job.Status,
+		"pages_done":    job.PagesDone,
+		"total_pages":   job.TotalPages,
+		"result_length": len(job.Result),
+	}
+}
+
 func generateJobID() string {
 	return uuid.New().String()
 }
@@ -73,7 +88,7 @@ func (store *JobStore) addJob(job *Job) {
 	job.PagesDone = 0 // Initialize PagesDone to 0
 	store.jobs[job.ID] = job
 	store.evictOldestTerminalLocked()
-	logger.Infof("Job added: %v", job)
+	logger.WithFields(jobLogFields(job)).Info("Job added")
 }
 
 // evictOldestTerminalLocked drops the oldest finished jobs while over capacity.
@@ -136,7 +151,10 @@ func (store *JobStore) updateJobStatus(jobID, status, result string) {
 			job.Result = result
 		}
 		job.UpdatedAt = time.Now()
-		logger.Infof("Job status updated: %v", job)
+		logger.WithFields(jobLogFields(job)).Info("Job status updated")
+		if result != "" {
+			logger.WithField("job_id", job.ID).Debugf("Job result: %s", result)
+		}
 	}
 }
 
@@ -146,7 +164,7 @@ func (store *JobStore) updatePagesDone(jobID string, pagesDone int) {
 	if job, exists := store.jobs[jobID]; exists {
 		job.PagesDone = pagesDone
 		job.UpdatedAt = time.Now()
-		logger.Infof("Job pages done updated: %v", job)
+		logger.WithFields(jobLogFields(job)).Info("Job pages done updated")
 	}
 }
 

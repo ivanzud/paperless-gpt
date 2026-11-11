@@ -789,6 +789,9 @@ func initLogger() {
 
 	// The OCR package has its own logger; keep it in sync with LOG_LEVEL.
 	ocr.SetLogLevel(log.GetLevel())
+	// So does the OCR job store, whose debug output is the only place a
+	// job's result text is logged.
+	logger.SetLevel(log.GetLevel())
 
 	log.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,

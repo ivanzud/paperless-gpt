@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tmc/langchaingo/llms"
@@ -300,4 +301,29 @@ func TestProcessImage_FrequencyPenaltyIsOptIn(t *testing.T) {
 	_, err = provider.ProcessImage(context.Background(), testJPEG(t), 1)
 	require.NoError(t, err)
 	assert.Equal(t, []float64{0.4}, llm.penalties)
+}
+
+func TestGenerationInfoLogFieldsCarryNoText(t *testing.T) {
+	const thinking = "The page is a statement for Jane Doe"
+	fields := generationInfoLogFields(map[string]any{
+		"CompletionTokens": 120,
+		"PromptTokens":     int64(3900),
+		"TotalTokens":      float64(4020),
+		"ThinkingContent":  thinking,
+		"ReasoningContent": "",
+		"Truncated":        false,
+		"Citations":        []string{"Jane Doe"},
+		"Nested":           map[string]any{"text": "John Doe"},
+		"Missing":          nil,
+	})
+
+	assert.Equal(t, logrus.Fields{
+		"CompletionTokens":       120,
+		"PromptTokens":           int64(3900),
+		"TotalTokens":            float64(4020),
+		"ThinkingContent_length": len(thinking),
+		"Truncated":              false,
+	}, fields)
+
+	assert.Empty(t, generationInfoLogFields(nil))
 }

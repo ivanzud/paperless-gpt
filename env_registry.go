@@ -84,7 +84,7 @@ var envRegistry = []EnvVar{
 	{Name: "LLM_TEMPERATURE", Category: "LLM", Secret: false, Default: "0", Description: "(Ollama metadata only) Sampling temperature for title, tag, and metadata generation. When unset, the native-client baseline is `0`. Must be a non-negative finite number; invalid values are ignored with a warning. Does not apply to Vision OCR or other LLM providers."},
 	{Name: "LOCAL_HOCR_PATH", Category: "PDF & hOCR", Secret: false, Default: "/app/hocr", Description: "Path where hOCR files will be saved when hOCR generation is enabled."},
 	{Name: "LOCAL_PDF_PATH", Category: "PDF & hOCR", Secret: false, Default: "/app/pdf", Description: "Path where PDF files will be saved when PDF generation is enabled."},
-	{Name: "LOG_LEVEL", Category: "Server & container", Secret: false, Default: "info", Description: "Application log level (`info`, `debug`, `warn`, `error`)."},
+	{Name: "LOG_LEVEL", Category: "Server & container", Secret: false, Default: "info", Description: "Application log level (`info`, `debug`, `warn`, `error`). `debug` also logs OCR result text and successful health probe requests; the other levels log lengths and counters only."},
 	{Name: "MANUAL_TAG", Category: "Tags & automation", Secret: false, Default: "paperless-gpt", Description: "Tag for manual processing."},
 	{Name: "MISTRAL_API_KEY", Category: "LLM", Secret: true, Default: "", Description: "Mistral API key (required if using Mistral)."},
 	{Name: "MISTRAL_MODEL", Category: "OCR", Secret: false, Default: "mistral-ocr-latest", Description: "Mistral OCR model used when OCR_PROVIDER is mistral_ocr."},
