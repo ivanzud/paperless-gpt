@@ -342,6 +342,7 @@ func main() {
 	}
 
 	visionLlmFrequencyPenalty := parseVisionLLMFrequencyPenalty(os.Getenv("VISION_LLM_FREQUENCY_PENALTY"))
+	visionLlmStopSequences := parseVisionLLMStopSequences(os.Getenv("VISION_LLM_STOP_SEQUENCES"))
 
 	var ollamaOcrTopK *int
 	if topKStr := os.Getenv("OLLAMA_OCR_TOP_K"); topKStr != "" {
@@ -425,6 +426,7 @@ func main() {
 		VisionLLMMaxTokens:        visionLlmMaxTokens,
 		VisionLLMTemperature:      visionLlmTemperature,
 		VisionLLMFrequencyPenalty: visionLlmFrequencyPenalty,
+		VisionLLMStopSequences:    visionLlmStopSequences,
 		OllamaOcrTopK:             ollamaOcrTopK,
 		OllamaContextLength:       ollamaContextLength,
 		GoogleAIAPIKey:            os.Getenv("GOOGLEAI_API_KEY"),
@@ -878,6 +880,29 @@ func validateOCRProviderModeCompatibility(provider, mode, visionProvider string)
 
 	return fmt.Errorf("OCR provider '%s' does not support processing mode '%s'. Supported modes: %v",
 		provider, mode, modes)
+}
+
+// maxVisionLLMStopSequences is the number of stop strings the OpenAI chat
+// API accepts; further entries are dropped.
+const maxVisionLLMStopSequences = 4
+
+// parseVisionLLMStopSequences reads VISION_LLM_STOP_SEQUENCES, a
+// comma-separated list of stop strings. Surrounding whitespace and empty
+// entries are dropped; an empty result sends nothing.
+func parseVisionLLMStopSequences(raw string) []string {
+	var sequences []string
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || slices.Contains(sequences, entry) {
+			continue
+		}
+		sequences = append(sequences, entry)
+	}
+	if len(sequences) > maxVisionLLMStopSequences {
+		log.Warnf("VISION_LLM_STOP_SEQUENCES lists %d entries, only the first %d are used", len(sequences), maxVisionLLMStopSequences)
+		sequences = sequences[:maxVisionLLMStopSequences]
+	}
+	return sequences
 }
 
 // validateOrDefaultEnvVars ensures all necessary environment variables are set

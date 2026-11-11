@@ -144,6 +144,7 @@ type scriptedVisionLLM struct {
 	calls        int
 	temperatures []float64
 	penalties    []float64
+	stops        [][]string
 }
 
 func (s *scriptedVisionLLM) GenerateContent(_ context.Context, _ []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
@@ -153,6 +154,7 @@ func (s *scriptedVisionLLM) GenerateContent(_ context.Context, _ []llms.MessageC
 	}
 	s.temperatures = append(s.temperatures, opts.Temperature)
 	s.penalties = append(s.penalties, opts.FrequencyPenalty)
+	s.stops = append(s.stops, opts.StopWords)
 	i := s.calls
 	s.calls++
 	if i >= len(s.choices) {
@@ -301,6 +303,23 @@ func TestProcessImage_FrequencyPenaltyIsOptIn(t *testing.T) {
 	_, err = provider.ProcessImage(context.Background(), testJPEG(t), 1)
 	require.NoError(t, err)
 	assert.Equal(t, []float64{0.4}, llm.penalties)
+}
+
+func TestProcessImage_StopSequencesAreOptIn(t *testing.T) {
+	good := &llms.ContentChoice{Content: "Acme\nPayment received, thank you.\nBalance 0.00", StopReason: "stop"}
+
+	llm := &scriptedVisionLLM{choices: []*llms.ContentChoice{good}}
+	_, err := retryTestProvider(llm).ProcessImage(context.Background(), testJPEG(t), 1)
+	require.NoError(t, err)
+	require.Len(t, llm.stops, 1)
+	assert.Empty(t, llm.stops[0], "nothing is sent unless configured")
+
+	llm = &scriptedVisionLLM{choices: []*llms.ContentChoice{good}}
+	provider := retryTestProvider(llm)
+	provider.stopSequences = []string{"<|im_end|>"}
+	_, err = provider.ProcessImage(context.Background(), testJPEG(t), 1)
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"<|im_end|>"}}, llm.stops)
 }
 
 func TestGenerationInfoLogFieldsCarryNoText(t *testing.T) {

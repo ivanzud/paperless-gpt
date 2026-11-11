@@ -135,6 +135,7 @@ var envRegistry = []EnvVar{
 	{Name: "TOKEN_LIMIT", Category: "Processing & limits", Secret: false, Default: "", Description: "Maximum tokens allowed for prompts/content. Set to `0` to disable limit. Useful for smaller LLMs."},
 	{Name: "VISION_LLM_BACKOFF_MAX_WAIT", Category: "OCR", Secret: false, Default: "30s", Description: "Maximum wait time between retries for the Vision LLM (e.g., `30s`)."},
 	{Name: "VISION_LLM_FREQUENCY_PENALTY", Category: "OCR", Secret: false, Default: "", Description: "OpenAI-style `frequency_penalty` (-2 to 2) sent with Vision LLM OCR requests to providers that accept it. Discourages repetition loops but can damage text that legitimately repeats, such as table rows. Unset or `0` sends nothing."},
+	{Name: "VISION_LLM_STOP_SEQUENCES", Category: "OCR", Secret: false, Default: "", Description: "Comma-separated stop strings (at most 4) sent with Vision LLM OCR requests. Use it for models that spell their end-of-turn marker as plain text (for example `<|im_end|>`) and then keep generating until the token cap. Unset sends nothing."},
 	{Name: "VISION_LLM_MAX_RETRIES", Category: "OCR", Secret: false, Default: "3", Description: "Maximum retry attempts for failed Vision LLM requests."},
 	{Name: "VISION_LLM_MAX_TOKENS", Category: "OCR", Secret: false, Default: "", Description: "Maximum tokens for Vision LLM OCR output."},
 	{Name: "VISION_LLM_HOST", Category: "OCR", Secret: false, Default: "", Description: "Legacy fallback URL for a separate vision Ollama service."},

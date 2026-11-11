@@ -41,8 +41,11 @@ type LLMProvider struct {
 	// frequencyPenalty is passed to providers that take an OpenAI-style
 	// frequency_penalty; nil sends nothing.
 	frequencyPenalty *float64
-	ollamaTopK       *int
-	ollamaThink      *bool
+	// stopSequences end the answer when the model writes one of them; empty
+	// sends nothing.
+	stopSequences []string
+	ollamaTopK    *int
+	ollamaThink   *bool
 }
 
 // WithPrompt returns a shallow copy of the provider with a different prompt.
@@ -102,6 +105,7 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 		maxTokens:        config.VisionLLMMaxTokens,
 		temperature:      config.VisionLLMTemperature,
 		frequencyPenalty: config.VisionLLMFrequencyPenalty,
+		stopSequences:    config.VisionLLMStopSequences,
 		ollamaTopK:       config.OllamaOcrTopK,
 		ollamaThink:      config.VisionLLMThink,
 	}, nil
@@ -177,6 +181,9 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 	}
 	if p.frequencyPenalty != nil {
 		callOpts = append(callOpts, llms.WithFrequencyPenalty(*p.frequencyPenalty))
+	}
+	if len(p.stopSequences) > 0 {
+		callOpts = append(callOpts, llms.WithStopWords(p.stopSequences))
 	}
 	if providerName == "ollama" && p.ollamaTopK != nil {
 		callOpts = append(callOpts, llms.WithTopK(*p.ollamaTopK))

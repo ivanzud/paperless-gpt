@@ -52,6 +52,11 @@ type Config struct {
 	// when set. It discourages repetition loops, at the risk of damaging
 	// text that legitimately repeats (tables), so it is off by default.
 	VisionLLMFrequencyPenalty *float64
+	// VisionLLMStopSequences are sent as stop strings when set. Some models
+	// spell their end-of-turn marker out as plain text instead of emitting
+	// the end token, so generation runs on past the end of the page until
+	// the token cap; a stop string ends the answer at the marker instead.
+	VisionLLMStopSequences []string
 
 	// Google AI (Gemini) settings
 	GoogleAIAPIKey         string

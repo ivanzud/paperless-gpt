@@ -105,6 +105,15 @@ func TestProcessDocumentOCR_DegeneratePagePolicy(t *testing.T) {
 	}
 }
 
+func TestParseVisionLLMStopSequences(t *testing.T) {
+	for _, raw := range []string{"", "   ", ",", " , ,"} {
+		assert.Empty(t, parseVisionLLMStopSequences(raw), "%q must not set the parameter", raw)
+	}
+	assert.Equal(t, []string{"<|im_end|>"}, parseVisionLLMStopSequences("<|im_end|>"))
+	assert.Equal(t, []string{"<|im_end|>", "END"}, parseVisionLLMStopSequences(" <|im_end|> , END ,, END"))
+	assert.Equal(t, []string{"a", "b", "c", "d"}, parseVisionLLMStopSequences("a,b,c,d,e"), "the API takes at most four")
+}
+
 func TestParseVisionLLMFrequencyPenalty(t *testing.T) {
 	for _, raw := range []string{"", "   ", "0", "0.0", "abc", "NaN", "2.5", "-3", "Inf"} {
 		assert.Nil(t, parseVisionLLMFrequencyPenalty(raw), "%q must not set the parameter", raw)
