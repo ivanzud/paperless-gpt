@@ -28,13 +28,22 @@ var (
 )
 
 func sanitizeOCRText(content string) string {
+	cleaned, _ := sanitizeOCRTextWithCommentary(content)
+	return cleaned
+}
+
+// sanitizeOCRTextWithCommentary is sanitizeOCRText plus the number of letters
+// and digits that were model commentary rather than transcription, which the
+// degenerate-output check needs (see degenerateOCRReason).
+func sanitizeOCRTextWithCommentary(content string) (string, int) {
 	cleaned := textsanitize.StripReasoning(content)
 	cleaned = stripMarkdownCodeFences(cleaned)
 	cleaned = stripModelControlTokens(cleaned)
 	cleaned = convertOCRHTML(cleaned)
 	cleaned = stripOCRFailureBoilerplate(cleaned)
 	cleaned = stripOCRChattyPrefixes(cleaned)
-	return strings.TrimSpace(cleaned)
+	cleaned, commentaryChars := stripOCRCommentary(cleaned)
+	return strings.TrimSpace(cleaned), commentaryChars
 }
 
 // IsMeaningfulOCRText rejects empty or boilerplate-only OCR responses before they poison the queue.

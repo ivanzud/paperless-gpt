@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"paperless-gpt/ocr"
+
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
@@ -532,10 +534,17 @@ func (app *App) runWorkflowDocumentOCR(ctx context.Context, document Document, w
 
 		// Same rules as the auto-OCR poll: a shutdown or an unreachable
 		// provider doesn't count against the document.
-		if ocrMaxRetries > 0 && ctx.Err() == nil && !isUnreachable(err) {
+		// Degenerate output is the exception to the retry budget: the provider
+		// already regenerated the page, and re-running the whole document
+		// would buy the same answer again.
+		degenerate := ocr.AsDegenerateOutput(err) != nil
+		if (ocrMaxRetries > 0 || degenerate) && ctx.Err() == nil && !isUnreachable(err) {
 			attempts := app.ocrFailures.recordFailure(document.ID)
-			if attempts >= ocrMaxRetries {
+			if attempts >= ocrMaxRetries || degenerate {
 				reason := fmt.Sprintf("OCR failed %d times", attempts)
+				if degenerate {
+					reason = "OCR produced degenerate output"
+				}
 				if recErr := markProcessingFailed(ctx, app.Client, app.Database, document, triggerTag, reason); recErr != nil {
 					docLogger.Errorf("Removing %q tag after repeated OCR failures also failed: %v", triggerTag, recErr)
 					return nil, fmt.Errorf("document %d workflow OCR error: %w", document.ID, err)
@@ -722,10 +731,18 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			// timeouts must count toward the limit. A provider that can't be
 			// reached at all (isUnreachable) is not the document's fault
 			// either, and doesn't count.
-			if ocrMaxRetries > 0 && ctx.Err() == nil && !isUnreachable(err) {
+			//
+			// Degenerate output is the exception to the retry budget: the
+			// provider already regenerated the page, and re-running the whole
+			// document would buy the same answer again.
+			degenerate := ocr.AsDegenerateOutput(err) != nil
+			if (ocrMaxRetries > 0 || degenerate) && ctx.Err() == nil && !isUnreachable(err) {
 				attempts := app.ocrFailures.recordFailure(document.ID)
-				if attempts >= ocrMaxRetries {
+				if attempts >= ocrMaxRetries || degenerate {
 					reason := fmt.Sprintf("OCR failed %d times", attempts)
+					if degenerate {
+						reason = "OCR produced degenerate output"
+					}
 					if recErr := markProcessingFailed(ctx, app.Client, app.Database, document, autoOcrTag, reason); recErr != nil {
 						cancel()
 						// Keep the failure count so the tag removal is

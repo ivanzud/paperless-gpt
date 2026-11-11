@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"paperless-gpt/internal/openrouterzdr"
@@ -194,18 +195,59 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		backoffMax = d
 	}
 
-	logger.Debug("Sending request to vision model")
-	var completion *llms.ContentResponse
-	var genErr error
+	// A model that answers with degenerate output (see DegenerateOutputError)
+	// gets regenerated before the page is given up.
+	degenerateRetries := 1
+	if v, convErr := strconv.Atoi(os.Getenv("OCR_DEGENERATE_RETRIES")); convErr == nil && v >= 0 {
+		degenerateRetries = v
+	}
+	var degenerateRetryTemperature *float64
+	if v, parseErr := strconv.ParseFloat(os.Getenv("OCR_DEGENERATE_RETRY_TEMPERATURE"), 64); parseErr == nil && v >= 0 && !math.IsInf(v, 0) {
+		degenerateRetryTemperature = &v
+	}
+
 	for attempt := 0; ; attempt++ {
-		completion, genErr = p.llm.GenerateContent(ctx, []llms.MessageContent{
+		opts := callOpts
+		if attempt > 0 && degenerateRetryTemperature != nil {
+			// Later options win, so this overrides the configured temperature.
+			opts = append(append([]llms.CallOption(nil), callOpts...), llms.WithTemperature(*degenerateRetryTemperature))
+		}
+		logger.Debug("Sending request to vision model")
+		completion, err := p.generateWithTransientRetry(ctx, parts, opts, maxRetries, backoffMax, logger)
+		if err != nil {
+			return nil, err
+		}
+		result, reason, detail := p.resultFromCompletion(completion, logger)
+		if reason == "" {
+			logger.WithField("content_length", len(result.Text)).WithFields(completion.Choices[0].GenerationInfo).Info("Successfully processed image")
+			return result, nil
+		}
+		degenerateLogger := logger.WithFields(logrus.Fields{
+			"reason":         reason,
+			"detail":         detail,
+			"content_length": len(result.Text),
+			"stop_reason":    completion.Choices[0].StopReason,
+		})
+		if attempt >= degenerateRetries {
+			degenerateLogger.Warn("Vision model returned degenerate output for this page; rejecting it")
+			return nil, &DegenerateOutputError{Reason: reason, Detail: detail, Result: result}
+		}
+		degenerateLogger.Warnf("Vision model returned degenerate output for this page; regenerating (attempt %d/%d)", attempt+1, degenerateRetries)
+	}
+}
+
+// generateWithTransientRetry sends one generation request, retrying transient
+// upstream errors (429/5xx) with exponential backoff.
+func (p *LLMProvider) generateWithTransientRetry(ctx context.Context, parts []llms.ContentPart, callOpts []llms.CallOption, maxRetries int, backoffMax time.Duration, logger *logrus.Entry) (*llms.ContentResponse, error) {
+	for attempt := 0; ; attempt++ {
+		completion, genErr := p.llm.GenerateContent(ctx, []llms.MessageContent{
 			{
 				Parts: parts,
 				Role:  llms.ChatMessageTypeHuman,
 			},
 		}, callOpts...)
 		if genErr == nil {
-			break
+			return completion, nil
 		}
 		msg := genErr.Error()
 		transient := strings.Contains(msg, "status code: 429") || strings.Contains(msg, "status code: 5")
@@ -230,11 +272,17 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		case <-time.After(backoff):
 		}
 	}
+}
 
-	text := sanitizeOCRText(completion.Choices[0].Content)
+// resultFromCompletion turns a model answer into an OCRResult and classifies
+// it: a non-empty reason means the output is degenerate and must not be
+// stored as a successful transcription.
+func (p *LLMProvider) resultFromCompletion(completion *llms.ContentResponse, logger *logrus.Entry) (result *OCRResult, reason, detail string) {
+	choice := completion.Choices[0]
+	text, commentaryChars := sanitizeOCRTextWithCommentary(choice.Content)
 	thinkingContent := ""
-	if completion.Choices[0].GenerationInfo != nil {
-		if rawThinking, ok := completion.Choices[0].GenerationInfo["ThinkingContent"].(string); ok {
+	if choice.GenerationInfo != nil {
+		if rawThinking, ok := choice.GenerationInfo["ThinkingContent"].(string); ok {
 			thinkingContent = sanitizeOCRText(rawThinking)
 		}
 	}
@@ -242,41 +290,62 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		// stop_reason=length with no text usually means a thinking model spent
 		// the whole VISION_LLM_MAX_TOKENS budget on reasoning.
 		logger.WithFields(logrus.Fields{
-			"stop_reason":     completion.Choices[0].StopReason,
+			"stop_reason":     choice.StopReason,
 			"thinking_length": len(thinkingContent),
 		}).Warn("Vision model returned no text for this page")
 	}
-	limitHit := false
-	tokenCount := -1
 
-	if p.maxTokens > 0 {
-		genInfo := completion.Choices[0].GenerationInfo
-		if genInfo != nil && genInfo["TotalTokens"] != nil {
-			if v, ok := genInfo["TotalTokens"].(int); ok {
-				tokenCount = v
-			}
-		}
-		// Fallback: count tokens using langchaingo (might not be accurate for all models)
-		if tokenCount < 0 {
+	// The provider says so itself when it stopped at the cap. Otherwise compare
+	// the completion tokens with the cap: VISION_LLM_MAX_TOKENS limits the
+	// completion, so the prompt tokens (an image is thousands of them) must
+	// not be part of the comparison.
+	limitHit := isLengthStopReason(choice.StopReason)
+	if !limitHit && p.maxTokens > 0 {
+		tokenCount, ok := completionTokenCount(choice.GenerationInfo)
+		if !ok {
+			// Fallback: count tokens using langchaingo (might not be accurate for all models)
 			tokenCount = llms.CountTokens(p.model, text)
 		}
-		if tokenCount >= p.maxTokens {
-			limitHit = true
-		}
+		limitHit = tokenCount >= p.maxTokens
 	}
 
-	result := &OCRResult{
+	result = &OCRResult{
 		Text: text,
 		Metadata: map[string]string{
 			"provider": p.provider,
 			"model":    p.model,
 		},
 		OcrLimitHit:    limitHit,
-		GenerationInfo: completion.Choices[0].GenerationInfo,
+		GenerationInfo: choice.GenerationInfo,
 	}
+	reason, detail = degenerateOCRReason(text, commentaryChars, limitHit)
+	return result, reason, detail
+}
 
-	logger.WithField("content_length", len(result.Text)).WithFields(completion.Choices[0].GenerationInfo).Info("Successfully processed image")
-	return result, nil
+// isLengthStopReason reports whether a provider's stop reason means the
+// completion was cut off at the token cap ("length", "max_tokens",
+// "MAX_TOKENS", "FinishReasonMaxTokens", ...).
+func isLengthStopReason(stopReason string) bool {
+	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(stopReason)), "_", "")
+	return normalized == "length" || strings.Contains(normalized, "maxtokens")
+}
+
+// completionTokenCount extracts the number of generated tokens from a
+// provider's usage metadata.
+func completionTokenCount(genInfo map[string]any) (int, bool) {
+	for _, key := range []string{"CompletionTokens", "OutputTokens", "output_tokens"} {
+		switch v := genInfo[key].(type) {
+		case int:
+			return v, true
+		case int32:
+			return int(v), true
+		case int64:
+			return int(v), true
+		case float64:
+			return int(v), true
+		}
+	}
+	return 0, false
 }
 
 func isGLMOCRModel(model string) bool {

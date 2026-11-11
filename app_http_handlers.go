@@ -15,6 +15,7 @@ import (
 	"text/template"
 	"time"
 
+	"paperless-gpt/ocr"
 	"paperless-gpt/sanitize"
 
 	"github.com/Masterminds/sprig/v3"
@@ -945,6 +946,12 @@ func (app *App) reOCRPageHandler(c *gin.Context) {
 	}()
 
 	result, err := app.ocrProvider.ProcessImage(reOcrCtx, imageContent, pageIdx+1)
+	// A reviewer asked for this page and sees the result before anything is
+	// applied, so degenerate output is shown (flagged) instead of withheld.
+	if degenerate := ocr.AsDegenerateOutput(err); degenerate != nil && degenerate.Result != nil {
+		log.Warnf("Re-OCR for doc %d page %d returned degenerate output (%s); returning it for review", parsedID, pageIdx, degenerate.Reason)
+		result, err = degenerate.Result, nil
+	}
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

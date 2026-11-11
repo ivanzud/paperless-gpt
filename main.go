@@ -65,6 +65,7 @@ var (
 	ocrProcessMode                = os.Getenv("OCR_PROCESS_MODE")
 	ocrSkipFailedPages            = strings.ToLower(os.Getenv("OCR_SKIP_FAILED_PAGES")) == "true"
 	ocrSkipFailedDocuments        = strings.ToLower(os.Getenv("OCR_SKIP_FAILED_DOCUMENTS")) == "true"
+	ocrDegeneratePageAction       = parseDegeneratePageAction(os.Getenv("OCR_DEGENERATE_PAGE_ACTION"))
 	ocrFailedTag                  = os.Getenv("OCR_FAILED_TAG")
 	llmProvider                   = os.Getenv("LLM_PROVIDER")
 	llmModel                      = os.Getenv("LLM_MODEL")
@@ -1083,6 +1084,12 @@ func validateOrDefaultEnvVars() {
 		log.Infof("OCR provider: %s", os.Getenv("OCR_PROVIDER"))
 		if ocrSkipFailedPages {
 			log.Warn("OCR_SKIP_FAILED_PAGES enabled: failed pages will be skipped instead of failing the whole document")
+		}
+		if raw := strings.TrimSpace(os.Getenv("OCR_DEGENERATE_PAGE_ACTION")); raw != "" && !strings.EqualFold(raw, ocrDegeneratePageAction) {
+			log.Warnf("Invalid OCR_DEGENERATE_PAGE_ACTION value %q (expected fail, skip or accept); using %q", raw, ocrDegeneratePageAction)
+		}
+		if ocrDegeneratePageAction != degeneratePageActionFail {
+			log.Warnf("OCR_DEGENERATE_PAGE_ACTION=%s: pages with degenerate OCR output will not fail their document", ocrDegeneratePageAction)
 		}
 		if ocrSkipFailedDocuments {
 			log.Warnf("OCR_SKIP_FAILED_DOCUMENTS enabled: failed OCR documents will be removed from the queue and tagged as %q", ocrFailedTag)

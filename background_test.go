@@ -786,6 +786,27 @@ func TestProcessAutoOcrTagDocuments_FailTagAfterMaxRetries(t *testing.T) {
 		assert.True(t, got.KeepOriginalTags)
 	})
 
+	t.Run("degenerate output fail-tags on the first attempt", func(t *testing.T) {
+		// The provider already regenerated the page; re-running the whole
+		// document would only buy the same output again. This holds even
+		// with the retry limit disabled.
+		for _, limit := range []int{3, 0} {
+			ocrMaxRetries = limit
+			client := &recordingClient{taggedDocuments: map[string][]Document{autoOcrTag: {newDoc(11)}}}
+			degenerate := fmt.Errorf("error performing OCR for document 11, page 2: %w", &ocr.DegenerateOutputError{Reason: ocr.DegenerateReasonTokenLimit})
+			app := newApp(client, &mockDocumentProcessor{mockErr: degenerate})
+
+			count, err := app.processAutoOcrTagDocuments(context.Background())
+			assert.NoError(t, err, "limit %d: a fail-tagged document must not keep the loop in backoff", limit)
+			assert.Equal(t, 0, count)
+			require.Len(t, client.calls, 1, "limit %d: exactly one recovery PATCH expected", limit)
+			got := client.calls[0]
+			assert.Equal(t, []string{autoOcrTag}, got.RemoveTags)
+			assert.Equal(t, []string{failTag}, got.SuggestedTags, "the document is marked failed, never OCR-complete")
+			assert.Empty(t, got.SuggestedContent, "no garbage content is written")
+		}
+	})
+
 	t.Run("successful OCR resets the counter", func(t *testing.T) {
 		ocrMaxRetries = 3
 		client := &recordingClient{taggedDocuments: map[string][]Document{autoOcrTag: {newDoc(8)}}}

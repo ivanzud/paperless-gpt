@@ -240,6 +240,8 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 
 		// Process the whole PDF in one go
 		result, err := provider.ProcessImage(ctx, originalPDFData, 0) // Page 0 indicates entire document
+		// There is no page to skip in this mode, so "skip" fails like "fail".
+		result, err, _ = applyDegeneratePagePolicy(result, err, docLogger)
 		if err != nil {
 			if shouldFallbackWholePDF(err) {
 				docLogger.WithError(err).WithField("fallback_process_mode", "pdf").Warn("Whole-PDF OCR hit a provider limit, retrying in per-page PDF mode")
@@ -323,8 +325,18 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 
 			// Pass the page number (1-based index) to ProcessImage
 			result, err := provider.ProcessImage(ctx, pdfContent, i+1)
+			result, err, skipDegenerate := applyDegeneratePagePolicy(result, err, pageLogger)
+			if skipDegenerate {
+				failedPages = append(failedPages, i+1)
+				if jobID != "" {
+					jobStore.updatePagesDone(jobID, i+1)
+				}
+				continue
+			}
 			if err != nil {
-				if ocrSkipFailedPages {
+				// A degenerate page is not skipped here: OCR_SKIP_FAILED_PAGES
+				// is for pages without text, not for pages with garbage.
+				if ocrSkipFailedPages && ocr.AsDegenerateOutput(err) == nil {
 					failedPages = append(failedPages, i+1)
 					if jobID != "" {
 						jobStore.updatePagesDone(jobID, i+1)
@@ -463,8 +475,19 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			} else {
 				// Pass the page number (1-based index) to ProcessImage
 				result, err = provider.ProcessImage(ctx, imageContent, i+1)
+				var skipDegenerate bool
+				result, err, skipDegenerate = applyDegeneratePagePolicy(result, err, pageLogger)
+				if skipDegenerate {
+					failedPages = append(failedPages, i+1)
+					if jobID != "" {
+						jobStore.updatePagesDone(jobID, i+1)
+					}
+					continue
+				}
 				if err != nil {
-					if ocrSkipFailedPages {
+					// A degenerate page is not skipped here: OCR_SKIP_FAILED_PAGES
+					// is for pages without text, not for pages with garbage.
+					if ocrSkipFailedPages && ocr.AsDegenerateOutput(err) == nil {
 						failedPages = append(failedPages, i+1)
 						if jobID != "" {
 							jobStore.updatePagesDone(jobID, i+1)
@@ -990,4 +1013,47 @@ func taskResultDetail(task map[string]interface{}) interface{} {
 		}
 	}
 	return "no detail from paperless-ngx"
+}
+
+// What to do with a page whose OCR output the provider rejected as degenerate
+// (see ocr.DegenerateOutputError), selected with OCR_DEGENERATE_PAGE_ACTION.
+const (
+	// Fail the document: it goes through the regular OCR failure handling and
+	// never receives the OCR-complete tag. The default.
+	degeneratePageActionFail = "fail"
+	// Leave the page out, like a failed page under OCR_SKIP_FAILED_PAGES.
+	degeneratePageActionSkip = "skip"
+	// Store the output anyway (the behavior before the check existed).
+	degeneratePageActionAccept = "accept"
+)
+
+func parseDegeneratePageAction(raw string) string {
+	switch action := strings.ToLower(strings.TrimSpace(raw)); action {
+	case degeneratePageActionSkip, degeneratePageActionAccept:
+		return action
+	default:
+		return degeneratePageActionFail
+	}
+}
+
+// applyDegeneratePagePolicy applies OCR_DEGENERATE_PAGE_ACTION to the outcome
+// of one provider call. Anything but a degenerate-output error passes through
+// unchanged. For a degenerate page it returns the rejected result (accept),
+// asks the caller to skip the page (skip), or keeps the error (fail).
+func applyDegeneratePagePolicy(result *ocr.OCRResult, err error, logger *logrus.Entry) (*ocr.OCRResult, error, bool) {
+	degenerate := ocr.AsDegenerateOutput(err)
+	if degenerate == nil {
+		return result, err, false
+	}
+	switch ocrDegeneratePageAction {
+	case degeneratePageActionAccept:
+		if degenerate.Result != nil {
+			logger.WithField("reason", degenerate.Reason).Warn("Storing degenerate OCR output because OCR_DEGENERATE_PAGE_ACTION=accept")
+			return degenerate.Result, nil, false
+		}
+	case degeneratePageActionSkip:
+		logger.WithField("reason", degenerate.Reason).Warn("Skipping page with degenerate OCR output because OCR_DEGENERATE_PAGE_ACTION=skip")
+		return nil, err, true
+	}
+	return result, err, false
 }
