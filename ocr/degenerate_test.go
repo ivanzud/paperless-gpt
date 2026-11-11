@@ -35,10 +35,12 @@ func TestDegenerateOCRReason(t *testing.T) {
 	}{
 		// Degenerate output.
 		{name: "non-empty text that stopped at the token cap", text: "Invoice 1234\nTotal 12.00", limitHit: true, want: DegenerateReasonTokenLimit},
-		{name: "one line repeated until it dominates the page", text: "Acme Corp\nInvoice 1234\n" + strings.Repeat(loopLine, 60), want: DegenerateReasonRepetition},
+		{name: "one line repeated until it dominates the page", text: "Acme Corp\nInvoice 1234\n" + strings.Repeat(loopLine, 120), want: DegenerateReasonRepetition},
 		{name: "short unit looping inside a single line", text: "Total due " + strings.Repeat("1. ", 400), want: DegenerateReasonRepetition},
 		{name: "one character looping", text: "Ref: " + strings.Repeat("0", 900), want: DegenerateReasonRepetition},
-		{name: "table row looping", text: "| Item | Qty |\n| --- | --- |\n" + strings.Repeat("| Widget | 2 |\n", 80), want: DegenerateReasonRepetition},
+		{name: "table row looping", text: "| Item | Qty |\n| --- | --- |\n" + strings.Repeat("| Widget | 2 |\n", 150), want: DegenerateReasonRepetition},
+		{name: "two alternating lines looping", text: "Acme Corp\n" + strings.Repeat("Subtotal 0.00\nTotal 0.00\n", 110), want: DegenerateReasonRepetition},
+		{name: "sentence looping inside a single line", text: "Acme Corp\n" + strings.Repeat("Payment received, thank you. ", 40), want: DegenerateReasonRepetition},
 		{name: "mixed symbol noise", text: "Job cost summary\nMaterials 120.00\n" + strings.Repeat("*+**+*+++*oe5-", 30), want: DegenerateReasonNoise},
 		{name: "short page that is mostly symbol noise", text: "Subtotal | -0-0-0-.0000-++++*+*+*+-|-|+*+*+**++ | 12", want: DegenerateReasonNoise},
 		{name: "commentary outweighs the transcription", text: "Page 2", commentaryChars: 120, want: DegenerateReasonCommentary},
@@ -53,6 +55,10 @@ func TestDegenerateOCRReason(t *testing.T) {
 		{name: "form with many identical empty rows", text: "Mileage log\n\n| Date | From | To | Miles |\n| --- | --- | --- | --- |\n" + strings.Repeat("|  |  |  |  |\n", 60)},
 		{name: "form with many identical checkbox rows", text: "Checklist\n\n" + strings.Repeat("| [ ] | [ ] | [ ] |\n", 70)},
 		{name: "identical filled rows next to other content", text: syntheticStatement(60) + strings.Repeat("| Monthly fee | 0.00 | 0.00 |\n", 30)},
+		{name: "page of identical filled statement rows", text: "Example Bank\n\n| Date | Description | Amount |\n| --- | --- | --- |\n" + strings.Repeat("| 01/02 | Card fee | 1.00 |\n", 60) + "Page 1 of 2"},
+		{name: "form answered N/A in every row", text: "Health questionnaire for Jane Doe\n\n" + strings.Repeat("| N/A | N/A | N/A |\n", 40)},
+		{name: "pre-printed log rows", text: "Mileage log\n\n" + strings.Repeat("| __/__/____ | AM PM | ______ mi |\n", 45)},
+		{name: "checklist ticked the same way in every row", text: "Checklist\n\n" + strings.Repeat("| [x] | [ ] | [ ] |\n", 70)},
 		{name: "ruler and dot-leader lines", text: "Contents\n" + strings.Repeat("Chapter ........................................ 12\n", 3) + strings.Repeat("-", 700) + "\n" + strings.Repeat("_", 700)},
 		{name: "repeated value in a short list", text: strings.Repeat("N/A\n", 25) + "Signed: Jane Doe, 1234 Maple Court"},
 		{name: "masked account digits and markdown emphasis", text: "**Account:** ************1234\n**Total:** $***.** (see ***note***)\nDue: --/--/----"},
@@ -288,7 +294,7 @@ func TestProcessImage_LimitHitUsesCompletionTokens(t *testing.T) {
 }
 
 func TestProcessImage_RegeneratesDegenerateOutput(t *testing.T) {
-	loop := &llms.ContentChoice{Content: "Acme\n" + strings.Repeat("Payment received, thank you.\n", 80), StopReason: "stop"}
+	loop := &llms.ContentChoice{Content: "Acme\n" + strings.Repeat("Payment received, thank you.\n", 150), StopReason: "stop"}
 	good := &llms.ContentChoice{Content: "Acme\nPayment received, thank you.\nBalance 0.00", StopReason: "stop"}
 	zero := 0.0
 

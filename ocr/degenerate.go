@@ -1,6 +1,7 @@
 package ocr
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"regexp"
@@ -28,6 +29,12 @@ const (
 	// ... covering at least this many bytes ...
 	degenerateMinLoopBytes = 600
 	// ... and at least half of the page (see hasRepetitionLoop).
+	//
+	// When the unit is one or more whole lines, a form or table can
+	// legitimately repeat it for most of a page: pre-printed log rows, a
+	// column of identical entries. More identical lines than fit on a page
+	// are needed before that is called a loop.
+	degenerateMinLineLoopRepeats = 100
 
 	// Symbol noise: runs of at least this many consecutive symbols that mix
 	// two or more characters other than table/ruler characters and form
@@ -180,8 +187,10 @@ func countDescriptiveCommentary(text string) int {
 //
 // What it must not flag: empty table rows and ruler lines (no letter or digit
 // in the unit), a table whose rows repeat a few dozen times next to other
-// content (less than half of the page), and several copies of the same form
-// on one page (the repeating unit is far longer than degenerateMaxLoopUnit).
+// content (less than half of the page), a page of identical filled rows
+// (fewer than degenerateMinLineLoopRepeats whole-line repeats), and several
+// copies of the same form on one page (the repeating unit is far longer than
+// degenerateMaxLoopUnit).
 func hasRepetitionLoop(text string) (unitLen, repeats int, found bool) {
 	b := []byte(text)
 	n := len(b)
@@ -206,18 +215,18 @@ func hasRepetitionLoop(text string) (unitLen, repeats int, found bool) {
 			if run+period < need {
 				continue
 			}
-			if unitHasLetterOrDigit(b[i-period+1 : i+1]) {
-				// Extend to the end of the run to report the real count.
-				for i+1 < n && b[i+1] == b[i+1-period] {
-					i++
-					run++
-				}
-				return period, (run + period) / period, true
-			}
-			// A unit without letters or digits (blank cells, rulers, spaces)
-			// stays that way for the rest of this run: skip past it.
+			// Extend to the end of the run: the verdict depends on the real
+			// count, and the unit stays the same for the rest of the run.
 			for i+1 < n && b[i+1] == b[i+1-period] {
 				i++
+				run++
+			}
+			unit := b[i-period+1 : i+1]
+			repeats := (run + period) / period
+			// A unit without letters or digits (blank cells, rulers, spaces)
+			// is never a loop; a unit of whole lines needs more repeats.
+			if unitHasLetterOrDigit(unit) && (repeats >= degenerateMinLineLoopRepeats || bytes.IndexByte(unit, '\n') < 0) {
+				return period, repeats, true
 			}
 			run = 0
 		}
