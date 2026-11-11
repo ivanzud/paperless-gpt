@@ -14,7 +14,13 @@ var (
 		regexp.MustCompile(`(?is)the image provided is too blurry and illegible to accurately recognize any text\.\s*therefore,\s*no text can be extracted from this image\.?`),
 		regexp.MustCompile(`(?is)\b\d+\.\s*the image contains a series of lines with no visible text or images\.\s*it appears to be a blank or poorly parsed document\.?`),
 	}
-	ocrChattyPrefixPatterns = []*regexp.Regexp{
+	// modelControlTokenPattern matches special tokens a vision model leaks into
+	// its answer: complete `<|name|>` tokens (layout labels, bounding-box
+	// coordinates, end-of-turn markers) and the truncated remnants of
+	// chat-template markers such as `|im_end|>`. None of them is document text.
+	modelControlTokenPattern = regexp.MustCompile(`<\|[^|<>\n]{1,40}\|>|<?\|(?:im_start|im_end|endoftext|end_of_text|eot_id)\|>?`)
+	excessBlankLinesPattern  = regexp.MustCompile(`\n[ \t]*(?:\n[ \t]*){2,}`)
+	ocrChattyPrefixPatterns  = []*regexp.Regexp{
 		regexp.MustCompile(`(?is)^\s*so,\s*here is the result of the text recognition:\s*(?:---\s*)?`),
 		regexp.MustCompile(`(?is)^\s*here(?:'s| is) the (?:result of the )?text recognition:\s*(?:---\s*)?`),
 		regexp.MustCompile(`(?is)^\s*here(?:'s| is) the extracted text:\s*(?:---\s*)?`),
@@ -24,6 +30,7 @@ var (
 func sanitizeOCRText(content string) string {
 	cleaned := textsanitize.StripReasoning(content)
 	cleaned = stripMarkdownCodeFences(cleaned)
+	cleaned = stripModelControlTokens(cleaned)
 	cleaned = convertOCRHTML(cleaned)
 	cleaned = stripOCRFailureBoilerplate(cleaned)
 	cleaned = stripOCRChattyPrefixes(cleaned)
@@ -62,6 +69,18 @@ func stripMarkdownCodeFences(content string) string {
 	}
 
 	return strings.Join(filtered, "\n")
+}
+
+// stripModelControlTokens removes leaked special tokens. Each token becomes a
+// line break rather than nothing: layout models put one token group in front
+// of every text block, so deleting them outright would glue the blocks
+// together. The blank lines that leaves behind are collapsed again.
+func stripModelControlTokens(content string) string {
+	if !modelControlTokenPattern.MatchString(content) {
+		return content
+	}
+	cleaned := modelControlTokenPattern.ReplaceAllString(content, "\n")
+	return excessBlankLinesPattern.ReplaceAllString(cleaned, "\n\n")
 }
 
 func stripOCRFailureBoilerplate(content string) string {
