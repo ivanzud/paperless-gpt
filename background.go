@@ -292,6 +292,15 @@ func (app *App) processAutoTagDocuments(ctx context.Context) (int, error) {
 	return totalProcessed, nil
 }
 
+// logTagProcessingStart logs which kind of processing a tagged document gets.
+func logTagProcessingStart(docLogger *logrus.Entry, workflow *WorkflowConfig, triggerTag string) {
+	if workflow != nil {
+		docLogger.Infof("Processing document for workflow %q (trigger tag: %s)", workflow.ID, triggerTag)
+		return
+	}
+	docLogger.Info("Processing document for auto-tagging")
+}
+
 // processTagDocuments fetches documents with the given tag and runs the
 // suggestion pipeline for each of them, with the workflow the router picks
 // for the document or the global settings.
@@ -336,11 +345,7 @@ func (app *App) processTagDocuments(ctx context.Context, triggerTag string) (int
 
 		docLogger := documentLogger(document.ID)
 		workflow := app.workflowRouter().WorkflowFor(document, triggerTag)
-		if workflow != nil {
-			docLogger.Infof("Processing document for workflow %q (trigger tag: %s)", workflow.ID, triggerTag)
-		} else {
-			docLogger.Info("Processing document for auto-tagging")
-		}
+		logTagProcessingStart(docLogger, workflow, triggerTag)
 
 		// Optional per-workflow OCR before metadata generation.
 		if workflow != nil {
