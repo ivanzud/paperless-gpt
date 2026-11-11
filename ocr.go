@@ -326,22 +326,12 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			// Pass the page number (1-based index) to ProcessImage
 			result, err := provider.ProcessImage(ctx, pdfContent, i+1)
 			result, err, skipDegenerate := applyDegeneratePagePolicy(result, err, pageLogger)
-			if skipDegenerate {
-				failedPages = append(failedPages, i+1)
-				if jobID != "" {
-					jobStore.updatePagesDone(jobID, i+1)
-				}
-				continue
-			}
 			if err != nil {
-				// A degenerate page is not skipped here: OCR_SKIP_FAILED_PAGES
-				// is for pages without text, not for pages with garbage.
-				if ocrSkipFailedPages && ocr.AsDegenerateOutput(err) == nil {
+				if skipFailedOCRPage(err, skipDegenerate, pageLogger) {
 					failedPages = append(failedPages, i+1)
 					if jobID != "" {
 						jobStore.updatePagesDone(jobID, i+1)
 					}
-					pageLogger.WithError(err).Warn("OCR failed for page; skipping due to OCR_SKIP_FAILED_PAGES")
 					continue
 				}
 				return nil, fmt.Errorf("error performing OCR for document %d, page %d: %w", documentID, i+1, err)
@@ -477,22 +467,12 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 				result, err = provider.ProcessImage(ctx, imageContent, i+1)
 				var skipDegenerate bool
 				result, err, skipDegenerate = applyDegeneratePagePolicy(result, err, pageLogger)
-				if skipDegenerate {
-					failedPages = append(failedPages, i+1)
-					if jobID != "" {
-						jobStore.updatePagesDone(jobID, i+1)
-					}
-					continue
-				}
 				if err != nil {
-					// A degenerate page is not skipped here: OCR_SKIP_FAILED_PAGES
-					// is for pages without text, not for pages with garbage.
-					if ocrSkipFailedPages && ocr.AsDegenerateOutput(err) == nil {
+					if skipFailedOCRPage(err, skipDegenerate, pageLogger) {
 						failedPages = append(failedPages, i+1)
 						if jobID != "" {
 							jobStore.updatePagesDone(jobID, i+1)
 						}
-						pageLogger.WithError(err).Warn("OCR failed for page; skipping due to OCR_SKIP_FAILED_PAGES")
 						continue
 					}
 					return nil, fmt.Errorf("error performing OCR for document %d, page %d: %w", documentID, i+1, err)
@@ -1056,4 +1036,52 @@ func applyDegeneratePagePolicy(result *ocr.OCRResult, err error, logger *logrus.
 		return nil, err, true
 	}
 	return result, err, false
+}
+
+// skipFailedOCRPage reports whether a page whose OCR call failed is left out
+// of the document instead of failing it. skipDegenerate is the verdict of
+// applyDegeneratePagePolicy. Without it a degenerate page is never skipped:
+// OCR_SKIP_FAILED_PAGES is for pages without text, not for pages with garbage.
+func skipFailedOCRPage(err error, skipDegenerate bool, logger *logrus.Entry) bool {
+	if skipDegenerate {
+		return true
+	}
+	if !ocrSkipFailedPages || ocr.AsDegenerateOutput(err) != nil {
+		return false
+	}
+	logger.WithError(err).Warn("OCR failed for page; skipping due to OCR_SKIP_FAILED_PAGES")
+	return true
+}
+
+// degenerateResultForReview turns a degenerate-output error into its rejected
+// result, for callers that show the text to a person before anything is
+// stored. Every other outcome passes through unchanged. what names the
+// request in the log line.
+func degenerateResultForReview(result *ocr.OCRResult, err error, what string) (*ocr.OCRResult, error) {
+	if degenerate := ocr.AsDegenerateOutput(err); degenerate != nil && degenerate.Result != nil {
+		log.Warnf("%s returned degenerate output (%s); returning it for review", what, degenerate.Reason)
+		return degenerate.Result, nil
+	}
+	return result, err
+}
+
+// ocrFailureCounts reports whether a failed OCR run counts against the
+// document. A shutdown or an unreachable provider never does. Degenerate
+// output always does, even with the retry budget switched off.
+func ocrFailureCounts(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || isUnreachable(err) {
+		return false
+	}
+	return ocrMaxRetries > 0 || ocr.AsDegenerateOutput(err) != nil
+}
+
+// ocrGiveUpReason reports whether a document is given up on after a failure
+// that counted, and why. Degenerate output is the exception to the retry
+// budget: the provider already regenerated the page, and re-running the whole
+// document would buy the same answer again.
+func ocrGiveUpReason(err error, attempts int) (string, bool) {
+	if ocr.AsDegenerateOutput(err) != nil {
+		return "OCR produced degenerate output", true
+	}
+	return fmt.Sprintf("OCR failed %d times", attempts), attempts >= ocrMaxRetries
 }

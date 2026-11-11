@@ -184,19 +184,26 @@ func (w *ocrMarkdownWriter) node(n *html.Node) {
 	w.afterFragment = false
 	switch n.Type {
 	case html.TextNode:
-		text := n.Data
-		if w.afterCheckbox {
-			text = strings.TrimLeft(text, " \t")
-			w.afterCheckbox = text == ""
-		}
-		w.sb.WriteString(text)
-		return
+		w.text(n)
 	case html.ElementNode:
+		w.element(n, afterFragment)
 	default:
 		w.children(n)
-		return
 	}
+}
 
+func (w *ocrMarkdownWriter) text(n *html.Node) {
+	text := n.Data
+	if w.afterCheckbox {
+		text = strings.TrimLeft(text, " \t")
+		w.afterCheckbox = text == ""
+	}
+	w.sb.WriteString(text)
+}
+
+// element writes one element; afterFragment tells whether the node right
+// before it was an inline fragment (span, label).
+func (w *ocrMarkdownWriter) element(n *html.Node, afterFragment bool) {
 	switch n.DataAtom {
 	case atom.Img, atom.Script, atom.Style:
 		return
@@ -209,18 +216,7 @@ func (w *ocrMarkdownWriter) node(n *html.Node) {
 	case atom.Hr:
 		w.block()
 	case atom.Table:
-		w.block()
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			if c.Type != html.ElementNode || c.DataAtom != atom.Caption {
-				continue
-			}
-			if caption := strings.TrimSpace(inlineText(c)); caption != "" {
-				w.sb.WriteString(caption)
-				w.block()
-			}
-		}
-		w.sb.WriteString(renderOCRTable(n))
-		w.block()
+		w.table(n)
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 		w.block()
 		level, _ := strconv.Atoi(n.Data[1:])
@@ -228,9 +224,7 @@ func (w *ocrMarkdownWriter) node(n *html.Node) {
 		w.sb.WriteString(strings.TrimSpace(strings.ReplaceAll(inlineText(n), "\n", " ")))
 		w.block()
 	case atom.Li:
-		if !strings.HasSuffix(w.sb.String(), "\n") && w.sb.Len() > 0 {
-			w.sb.WriteString("\n")
-		}
+		w.line()
 		w.sb.WriteString("- ")
 		w.sb.WriteString(strings.TrimSpace(inlineText(n)))
 		w.sb.WriteString("\n")
@@ -250,18 +244,40 @@ func (w *ocrMarkdownWriter) node(n *html.Node) {
 		w.children(n)
 		w.line()
 	case atom.Span, atom.Label:
-		// Two fragments marked up one right after the other are two pieces
-		// of text; without a separator they would read as one word.
-		if afterFragment {
-			if s := w.sb.String(); s != "" && !strings.HasSuffix(s, " ") && !strings.HasSuffix(s, "\n") {
-				w.sb.WriteString(" ")
-			}
-		}
-		w.children(n)
-		w.afterFragment = true
+		w.fragment(n, afterFragment)
 	default:
 		w.children(n)
 	}
+}
+
+// table writes the caption above the table: it is text of the page, and the
+// grid itself has no place for it.
+func (w *ocrMarkdownWriter) table(n *html.Node) {
+	w.block()
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type != html.ElementNode || c.DataAtom != atom.Caption {
+			continue
+		}
+		if caption := strings.TrimSpace(inlineText(c)); caption != "" {
+			w.sb.WriteString(caption)
+			w.block()
+		}
+	}
+	w.sb.WriteString(renderOCRTable(n))
+	w.block()
+}
+
+// fragment writes a span or label. Two fragments marked up one right after
+// the other are two pieces of text; without a separator they would read as
+// one word.
+func (w *ocrMarkdownWriter) fragment(n *html.Node, afterFragment bool) {
+	if afterFragment {
+		if s := w.sb.String(); s != "" && !strings.HasSuffix(s, " ") && !strings.HasSuffix(s, "\n") {
+			w.sb.WriteString(" ")
+		}
+	}
+	w.children(n)
+	w.afterFragment = true
 }
 
 // line moves to the start of a new line unless the output is already there.
@@ -310,61 +326,7 @@ func renderOCRTable(table *html.Node) string {
 	pending := map[int]int{} // column -> rows still covered by a rowspan above
 
 	for _, tr := range descendants(table, atom.Tr) {
-		var row []*ocrTableCell
-		col := 0
-		// Rowspans opened in this row only cover the rows below it. Keeping
-		// them apart until the row is done stops a parent cell's own ghost
-		// cells from being mistaken for covered columns.
-		opened := map[int]int{}
-		skipCovered := func() {
-			for pending[col] > 0 {
-				pending[col]--
-				row = append(row, &ocrTableCell{})
-				col++
-			}
-		}
-		for c := tr.FirstChild; c != nil; c = c.NextSibling {
-			if c.Type != html.ElementNode || (c.DataAtom != atom.Td && c.DataAtom != atom.Th) {
-				continue
-			}
-			ghost := attr(c, "data-kind") == "ghost"
-			if ghost && pending[col] > 0 {
-				// The model spelled out a slot that a rowspan above already
-				// covers: the ghost is that slot, not an extra column.
-				pending[col]--
-				row = append(row, &ocrTableCell{header: c.DataAtom == atom.Th})
-				col++
-				continue
-			}
-			skipCovered()
-			cell := &ocrTableCell{header: c.DataAtom == atom.Th}
-			if !ghost {
-				cell.text = cellText(c)
-			}
-			row = append(row, cell)
-
-			colspan := spanAttr(c, "colspan", "data-cs")
-			rowspan := spanAttr(c, "rowspan", "data-rs")
-			// Surya follows a "parent" cell with ghost cells for the columns it
-			// spans; only pad spans the model did not already spell out.
-			pad := colspan - 1
-			if attr(c, "data-kind") == "parent" {
-				pad = 0
-			}
-			for i := 0; i < pad; i++ {
-				row = append(row, &ocrTableCell{})
-			}
-			if rowspan > 1 {
-				for i := 0; i < colspan; i++ {
-					opened[col+i] = rowspan - 1
-				}
-			}
-			col += 1 + pad
-		}
-		skipCovered()
-		for c, n := range opened {
-			pending[c] = n
-		}
+		row := layoutOCRTableRow(tr, pending)
 		// Blank form lines carry no text; keep the header row so the table
 		// still has one.
 		if len(row) > 0 && (len(rows) == 0 || !emptyRow(row)) {
@@ -374,7 +336,74 @@ func renderOCRTable(table *html.Node) string {
 	if len(rows) == 0 {
 		return ""
 	}
+	return formatOCRTable(rows)
+}
 
+// layoutOCRTableRow places the cells of one row on the grid. pending carries
+// the rowspans still open from the rows above and is updated for the rows
+// below.
+func layoutOCRTableRow(tr *html.Node, pending map[int]int) []*ocrTableCell {
+	var row []*ocrTableCell
+	col := 0
+	// Rowspans opened in this row only cover the rows below it. Keeping
+	// them apart until the row is done stops a parent cell's own ghost
+	// cells from being mistaken for covered columns.
+	opened := map[int]int{}
+	skipCovered := func() {
+		for pending[col] > 0 {
+			pending[col]--
+			row = append(row, &ocrTableCell{})
+			col++
+		}
+	}
+	for c := tr.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type != html.ElementNode || (c.DataAtom != atom.Td && c.DataAtom != atom.Th) {
+			continue
+		}
+		ghost := attr(c, "data-kind") == "ghost"
+		if ghost && pending[col] > 0 {
+			// The model spelled out a slot that a rowspan above already
+			// covers: the ghost is that slot, not an extra column.
+			pending[col]--
+			row = append(row, &ocrTableCell{header: c.DataAtom == atom.Th})
+			col++
+			continue
+		}
+		skipCovered()
+		cell := &ocrTableCell{header: c.DataAtom == atom.Th}
+		if !ghost {
+			cell.text = cellText(c)
+		}
+		row = append(row, cell)
+
+		colspan := spanAttr(c, "colspan", "data-cs")
+		rowspan := spanAttr(c, "rowspan", "data-rs")
+		// Surya follows a "parent" cell with ghost cells for the columns it
+		// spans; only pad spans the model did not already spell out.
+		pad := colspan - 1
+		if attr(c, "data-kind") == "parent" {
+			pad = 0
+		}
+		for i := 0; i < pad; i++ {
+			row = append(row, &ocrTableCell{})
+		}
+		if rowspan > 1 {
+			for i := 0; i < colspan; i++ {
+				opened[col+i] = rowspan - 1
+			}
+		}
+		col += 1 + pad
+	}
+	skipCovered()
+	for c, n := range opened {
+		pending[c] = n
+	}
+	return row
+}
+
+// formatOCRTable writes the grid as a Markdown table, padding short rows to
+// the width of the widest one.
+func formatOCRTable(rows [][]*ocrTableCell) string {
 	width := 0
 	for _, row := range rows {
 		if len(row) > width {

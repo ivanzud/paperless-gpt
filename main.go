@@ -882,6 +882,17 @@ func validateOCRProviderModeCompatibility(provider, mode, visionProvider string)
 		provider, mode, modes)
 }
 
+// warnAboutDegeneratePageAction logs a rejected OCR_DEGENERATE_PAGE_ACTION
+// value and any setting that lets degenerate pages through.
+func warnAboutDegeneratePageAction(raw string) {
+	if raw = strings.TrimSpace(raw); raw != "" && !strings.EqualFold(raw, ocrDegeneratePageAction) {
+		log.Warnf("Invalid OCR_DEGENERATE_PAGE_ACTION value %q (expected fail, skip or accept); using %q", raw, ocrDegeneratePageAction)
+	}
+	if ocrDegeneratePageAction != degeneratePageActionFail {
+		log.Warnf("OCR_DEGENERATE_PAGE_ACTION=%s: pages with degenerate OCR output will not fail their document", ocrDegeneratePageAction)
+	}
+}
+
 // maxVisionLLMStopSequences is the number of stop strings the OpenAI chat
 // API accepts; further entries are dropped.
 const maxVisionLLMStopSequences = 4
@@ -1154,12 +1165,7 @@ func validateOrDefaultEnvVars() {
 		if ocrSkipFailedPages {
 			log.Warn("OCR_SKIP_FAILED_PAGES enabled: failed pages will be skipped instead of failing the whole document")
 		}
-		if raw := strings.TrimSpace(os.Getenv("OCR_DEGENERATE_PAGE_ACTION")); raw != "" && !strings.EqualFold(raw, ocrDegeneratePageAction) {
-			log.Warnf("Invalid OCR_DEGENERATE_PAGE_ACTION value %q (expected fail, skip or accept); using %q", raw, ocrDegeneratePageAction)
-		}
-		if ocrDegeneratePageAction != degeneratePageActionFail {
-			log.Warnf("OCR_DEGENERATE_PAGE_ACTION=%s: pages with degenerate OCR output will not fail their document", ocrDegeneratePageAction)
-		}
+		warnAboutDegeneratePageAction(os.Getenv("OCR_DEGENERATE_PAGE_ACTION"))
 		if ocrSkipFailedDocuments {
 			log.Warnf("OCR_SKIP_FAILED_DOCUMENTS enabled: failed OCR documents will be removed from the queue and tagged as %q", ocrFailedTag)
 		}

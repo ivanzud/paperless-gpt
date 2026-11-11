@@ -1096,6 +1096,21 @@ func marshalTagsForHistory(tags []string) string {
 	return string(b)
 }
 
+// withCurrentTags returns the fetched copy of document documentID with its
+// tags replaced by the ones the document has in paperless-ngx right now. Not
+// being able to read them is no reason to drop an update: the copy is then
+// returned as it was fetched.
+func (client *PaperlessClient) withCurrentTags(ctx context.Context, documentID int, doc Document, availableTags map[string]int) Document {
+	tagIDs, err := client.currentDocumentTagIDs(ctx, documentID)
+	if err != nil {
+		log.Warnf("Document %d: could not re-read its current tags, using the tags from when it was fetched: %v", documentID, err)
+		return doc
+	}
+	doc.TagIDs = tagIDs
+	doc.Tags, _ = resolveTagNames(tagIDs, availableTags)
+	return doc
+}
+
 // currentDocumentTagIDs reads the tag IDs a document carries right now. It
 // asks for the tags only, so the request stays small no matter how long the
 // document's content is.
@@ -1190,15 +1205,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 
 	for _, document := range documents {
 		documentID := document.ID
-		originalDoc := document.OriginalDocument
-		if tagIDs, err := client.currentDocumentTagIDs(ctx, documentID); err != nil {
-			// Not being able to read the document is no reason to drop the
-			// update: fall back to the snapshot, as before.
-			log.Warnf("Document %d: could not re-read its current tags, using the tags from when it was fetched: %v", documentID, err)
-		} else {
-			originalDoc.TagIDs = tagIDs
-			originalDoc.Tags, _ = resolveTagNames(tagIDs, availableTags)
-		}
+		originalDoc := client.withCurrentTags(ctx, documentID, document.OriginalDocument, availableTags)
 		updatedFields := make(map[string]interface{})
 		originalFields := make(map[string]interface{})
 		var partialDroppedFields []string
