@@ -19,3 +19,7 @@ web-app/e2e/test-results
 # Local design-session context (not part of the repo)
 .impeccable/
 PRODUCT.md
+
+# Local agent tooling (not part of the repo)
+.beads/
+.agents/
