@@ -18,7 +18,11 @@ var (
 	// its answer: complete `<|name|>` tokens (layout labels, bounding-box
 	// coordinates, end-of-turn markers) and the truncated remnants of
 	// chat-template markers such as `|im_end|>`. None of them is document text.
-	modelControlTokenPattern = regexp.MustCompile(`<\|[^|<>\n]{1,40}\|>|<?\|(?:im_start|im_end|endoftext|end_of_text|eot_id)\|>?`)
+	//
+	// A token name never contains whitespace, and a remnant keeps at least one
+	// of its angle brackets. Anything looser deletes document text: the words
+	// between two operators in `a <| b |> c`, or a table cell `|im_end|`.
+	modelControlTokenPattern = regexp.MustCompile(`<\|[^|<>\s]{1,40}\|>|<\|(?:im_start|im_end|endoftext|end_of_text|eot_id)\||\|(?:im_start|im_end|endoftext|end_of_text|eot_id)\|>`)
 	excessBlankLinesPattern  = regexp.MustCompile(`\n[ \t]*(?:\n[ \t]*){2,}`)
 	ocrChattyPrefixPatterns  = []*regexp.Regexp{
 		regexp.MustCompile(`(?is)^\s*so,\s*here is the result of the text recognition:\s*(?:---\s*)?`),

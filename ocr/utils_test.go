@@ -82,6 +82,21 @@ func TestSanitizeOCRTextStripsModelControlTokens(t *testing.T) {
 			input:    "if a <b| or c |> d\n\n\n\nnext paragraph",
 			expected: "if a <b| or c |> d\n\n\n\nnext paragraph",
 		},
+		{
+			name:     "text between two pipe operators is not a token",
+			input:    "x = a <| b |> c\nTotal due: 12.00<|im_end|>",
+			expected: "x = a <| b |> c\nTotal due: 12.00",
+		},
+		{
+			name:     "operators inside an HTML paragraph keep the words between them",
+			input:    "<p>f <| g and h |> k</p><|Text|><|10|><|20|><|30|><|40|><p>Acme</p>",
+			expected: "f <| g and h |> k\n\nAcme",
+		},
+		{
+			name:     "a table cell that merely looks like a marker name is kept",
+			input:    "|im_end|im_start|\n| --- | --- |\n| 1 | 2 |\n<|im_end|",
+			expected: "|im_end|im_start|\n| --- | --- |\n| 1 | 2 |",
+		},
 	}
 
 	for _, tc := range tests {
