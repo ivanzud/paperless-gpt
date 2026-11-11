@@ -1877,6 +1877,38 @@ func normalizeOriginalImage(documentID int, data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// pageRenderDPI picks the resolution for rendering a PDF page of the given
+// size (in points) so the image stays within the IMAGE_MAX_* limits. The
+// result is a whole number because the renderer only takes whole DPI values,
+// and it is rounded down so rounding can never push the image over a limit.
+//
+// There is deliberately no lower bound other than 1 DPI. A page whose
+// physical size is huge (a photo embedded at 72 DPI is several thousand
+// points long) needs less than 72 DPI to fit, and an earlier 72 DPI floor
+// made exactly those pages exceed the pixel limits, which the vision model
+// then paid for in prompt tokens. A limit of zero or less is disabled, as it
+// is for image originals.
+func pageRenderDPI(wPts, hPts float64, maxPixelDimension, maxTotalPixels, maxRenderDPI int) float64 {
+	const fallbackDPI = 72
+
+	dpi := math.Inf(1)
+	if maxRenderDPI > 0 {
+		dpi = float64(maxRenderDPI)
+	}
+	if wPts > 0 && hPts > 0 {
+		if maxPixelDimension > 0 {
+			dpi = math.Min(dpi, float64(maxPixelDimension)*72/math.Max(wPts, hPts))
+		}
+		if maxTotalPixels > 0 {
+			dpi = math.Min(dpi, math.Sqrt(float64(maxTotalPixels)*72*72/(wPts*hPts)))
+		}
+	}
+	if math.IsInf(dpi, 1) || math.IsNaN(dpi) {
+		return fallbackDPI
+	}
+	return math.Max(1, math.Floor(dpi))
+}
+
 // isPDFData reports whether downloaded bytes look like a PDF by magic number.
 // Paperless-ngx may serve the original file instead of an archived PDF (e.g.
 // when PAPERLESS_ARCHIVE_FILE_GENERATION=never), so the download is not
@@ -1977,9 +2009,6 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 	for n := 0; n < pagesToProcess; n++ {
 		n := n // capture loop variable
 		g.Go(func() error {
-			// DPI calculation constants
-			const minDPI = 72 // Minimum DPI to ensure readable text
-
 			mu.Lock() // a PDFium document is not safe for concurrent use
 			wPts, hPts, err := doc.PageSize(n)
 			if err != nil {
@@ -1987,16 +2016,7 @@ func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, doc
 				return err
 			}
 
-			// Calculate DPI limits based on maximum allowed dimension and total pixels
-			dpiSide := float64(imageMaxPixelDimension*72) / math.Max(wPts, hPts)
-			dpiArea := math.Sqrt(float64(imageMaxTotalPixels) * 72 * 72 / (wPts * hPts))
-
-			// Use the more restrictive of the two limits
-			dpi := math.Min(dpiSide, dpiArea)
-
-			// Ensure DPI stays within acceptable bounds
-			dpi = math.Min(dpi, float64(imageMaxRenderDPI))
-			dpi = math.Max(dpi, float64(minDPI))
+			dpi := pageRenderDPI(wPts, hPts, imageMaxPixelDimension, imageMaxTotalPixels, imageMaxRenderDPI)
 
 			// Render the page at calculated DPI
 			var img image.Image
