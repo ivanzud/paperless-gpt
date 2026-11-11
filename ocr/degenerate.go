@@ -74,9 +74,13 @@ var (
 	// commenting on the page, not text printed on it. Short markers such as
 	// "[illegible]" are intentionally not matched (see minCommentaryLineBytes).
 	ocrLegibilityCommentaryPattern = regexp.MustCompile(`(?i)\b(?:illegible|unreadable|not legible|faint|faded|blurry|blurred|too (?:small|dark|light|blurry) to (?:read|transcribe))\b`)
-	// A line that opens by describing the picture or by refusing is commentary
+	// A page that opens by describing the picture or by refusing is commentary
 	// too. It is only counted, never removed: unlike the bracketed form it
-	// could, rarely, be genuine document text.
+	// could, rarely, be genuine document text. Only the first non-empty line
+	// of a page is considered (see countDescriptiveCommentary): a model that
+	// comments instead of transcribing starts with it, whereas a letter says
+	// "I am sorry to inform you ..." or "Unfortunately, I ..." in its body,
+	// after a letterhead, a date or a salutation.
 	ocrDescriptiveCommentaryPattern = regexp.MustCompile(`(?i)^(?:(?:the|this) (?:image|picture|photo|scan|scanned image|scanned page) (?:shows|appears|contains|displays|depicts|is)\b|i(?:'m| am) (?:sorry|unable)\b|i (?:cannot|can't|apologi[sz]e)\b|sorry, (?:but )?i\b|unfortunately, i\b|as an ai\b)`)
 )
 
@@ -96,15 +100,13 @@ func stripOCRCommentary(content string) (cleaned string, commentaryChars int) {
 			commentaryChars += countLettersAndDigits(trimmed)
 			continue
 		}
-		if ocrDescriptiveCommentaryPattern.MatchString(trimmed) {
-			commentaryChars += countLettersAndDigits(trimmed)
-		}
 		kept = append(kept, line)
 	}
-	if len(kept) == len(lines) {
-		return content, commentaryChars
+	cleaned = content
+	if len(kept) != len(lines) {
+		cleaned = strings.TrimSpace(strings.Join(kept, "\n"))
 	}
-	return strings.TrimSpace(strings.Join(kept, "\n")), commentaryChars
+	return cleaned, commentaryChars + countDescriptiveCommentary(cleaned)
 }
 
 func isBracketedLegibilityCommentary(line string) bool {
@@ -153,15 +155,22 @@ func degenerateOCRReason(text string, commentaryChars int, limitHit bool) (reaso
 	return "", ""
 }
 
+// countDescriptiveCommentary returns the number of letters and digits in the
+// first non-empty line of text when that line describes the picture or
+// refuses the task, and 0 otherwise. Later lines never count: the same words
+// in the body of a letter are document text.
 func countDescriptiveCommentary(text string) int {
-	n := 0
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if ocrDescriptiveCommentaryPattern.MatchString(trimmed) {
-			n += countLettersAndDigits(trimmed)
+		if trimmed == "" {
+			continue
 		}
+		if ocrDescriptiveCommentaryPattern.MatchString(trimmed) {
+			return countLettersAndDigits(trimmed)
+		}
+		return 0
 	}
-	return n
+	return 0
 }
 
 // hasRepetitionLoop reports a runaway generation loop: one short unit that

@@ -119,6 +119,61 @@ func TestSanitizeOCRTextStripsBracketedCommentary(t *testing.T) {
 	}
 }
 
+func TestDescriptiveCommentaryOnlyCountsWhenItOpensThePage(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// Letters that use the same words as a refusal in their body.
+		{
+			name:  "apology in the body of a short letter",
+			input: "Dear Jane Doe,\n\nI am sorry to inform you that your application for the Acme rewards card could not be approved at this time because the form we received was incomplete.\n\nSincerely,\nJohn Doe",
+		},
+		{
+			name:  "regret in the body of a short letter",
+			input: "Acme Corp\n\nUnfortunately, I will not be able to attend the meeting on 01/02/2020 and have asked Example Bank to send the signed papers to 1234 Maple Court instead.\n\nJohn Doe",
+		},
+		{
+			name:  "refusal wording inside an HTML letter",
+			input: "<p>Dear John Doe,</p><p>I cannot accept the offer you sent on 01/02/2020, because the quoted price does not include delivery to Oak Ave as we agreed on the phone.</p><p>Jane Doe</p>",
+		},
+		{
+			name:  "caption below other text",
+			input: "Site visit report 1234\n\nThis photo shows the repaired fence along Oak Ave after the work was completed by Acme.",
+		},
+
+		// The model commenting instead of transcribing.
+		{
+			name:  "refusal instead of a transcription",
+			input: "I'm sorry, but I can't transcribe the text in this image because it is too small.",
+			want:  DegenerateReasonCommentary,
+		},
+		{
+			name:  "refusal followed by a fragment",
+			input: "\nUnfortunately, I am unable to make out the handwriting on this scanned page with any confidence.\n\nPage 2",
+			want:  DegenerateReasonCommentary,
+		},
+		{
+			name:  "description of the picture",
+			input: "The image shows a scanned letter with a company logo in the top left corner and several paragraphs of text.",
+			want:  DegenerateReasonCommentary,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			text, commentary := sanitizeOCRTextWithCommentary(tc.input)
+			reason, detail := degenerateOCRReason(text, commentary, false)
+			assert.Equal(t, tc.want, reason, detail)
+			if tc.want == "" {
+				assert.Zero(t, commentary)
+				assert.True(t, IsMeaningfulOCRText(text))
+			}
+		})
+	}
+}
+
 func TestIsLengthStopReason(t *testing.T) {
 	for _, reason := range []string{"length", "LENGTH", "max_tokens", "MAX_TOKENS", "FinishReasonMaxTokens"} {
 		assert.True(t, isLengthStopReason(reason), reason)
