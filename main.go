@@ -538,8 +538,10 @@ func main() {
 	// Start Background-Tasks for Auto-Tagging and Auto-OCR (if enabled)
 	backgroundDone := StartBackgroundTasks(ctx, app)
 
-	// Create a Gin router with default middleware (logger and recovery)
-	router := gin.Default()
+	// Create a Gin router with the default middleware (logger and recovery),
+	// minus the access log line for successful health probes.
+	router := gin.New()
+	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{Skip: skipAccessLog}), gin.Recovery())
 
 	// API routes
 	api := router.Group("/api")
@@ -768,6 +770,23 @@ func printVersion() {
 	fmt.Printf("%s %s\n", yellow("Go Version:"), runtime.Version())
 	fmt.Printf("%s %s\n", yellow("Started:"), time.Now().Format(time.RFC1123))
 	fmt.Println()
+}
+
+// healthProbePath is what container health checks request, typically every
+// few seconds.
+const healthProbePath = "/api/version"
+
+// skipAccessLog keeps successful health probes out of the access log, where
+// they otherwise outnumber every other line many times over and push real
+// events out of a size-limited log. Failed probes are still logged, and so is
+// everything at LOG_LEVEL=debug.
+func skipAccessLog(c *gin.Context) bool {
+	if log.IsLevelEnabled(logrus.DebugLevel) {
+		return false
+	}
+	return c.Request.Method == http.MethodGet &&
+		c.Request.URL.Path == healthProbePath &&
+		c.Writer.Status() < http.StatusBadRequest
 }
 
 func initLogger() {
