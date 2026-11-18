@@ -1,5 +1,9 @@
 # paperless-gpt
 
+> **About this fork.** This is a personally maintained fork of [icereed/paperless-gpt](https://github.com/icereed/paperless-gpt).
+> I update it whenever my own setup needs a change, so there is no release schedule and no promise
+> of support. Issues and pull requests are welcome and are answered as time allows. The image is published as `ghcr.io/ivanzud/paperless-gpt:latest` (linux/amd64 only). Badges and links further down come from the upstream project.
+
 [![License](https://img.shields.io/github/license/icereed/paperless-gpt)](LICENSE)
 [![Discord Banner](https://img.shields.io/badge/Join%20us%20on-Discord-blue?logo=discord)](https://discord.gg/fJQppDH2J7)
 [![Docker Pulls](https://img.shields.io/docker/pulls/icereed/paperless-gpt)](https://hub.docker.com/r/icereed/paperless-gpt)
