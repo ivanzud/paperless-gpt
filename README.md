@@ -1,8 +1,10 @@
 # paperless-gpt
 
-> **About this fork.** This is a personally maintained fork of [icereed/paperless-gpt](https://github.com/icereed/paperless-gpt).
-> I update it whenever my own setup needs a change, so there is no release schedule and no promise
-> of support. Issues and pull requests are welcome and are answered as time allows. The image is published as `ghcr.io/ivanzud/paperless-gpt:latest` (linux/amd64 only). Badges and links further down come from the upstream project.
+> **About this fork.** This is a personally maintained fork of
+> [icereed/paperless-gpt](https://github.com/icereed/paperless-gpt). I update it whenever my own setup needs a
+> change, so there is no release schedule and no promise of support. Issues and pull requests are welcome and are
+> answered as time allows. The image is published as `ghcr.io/ivanzud/paperless-gpt:latest` (linux/amd64 only).
+> Badges and links further down come from the upstream project.
 
 ## What this fork changes
 
@@ -50,6 +52,124 @@ local vision model for OCR, so most of the work went into making unattended OCR 
 - Pinned base images, and CI that enforces lint, security and complexity checks on Go 1.27.
 
 Every setting is described in the [environment variable table](#environment-variables).
+
+## Using it together with paperless-ai
+
+This fork is run as the first of two steps behind [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx):
+paperless-gpt reads the text of each new document with a vision model, and
+[paperless-ai](https://github.com/ivanzud/paperless-ai) then classifies the document from that text. The two
+tools never talk to each other. Each one watches for a tag, and paperless-ngx workflows pass the document along.
+
+```text
+scanner or upload
+      |
+      v
+paperless-ngx consumes the file      workflow 1 adds  paperless-gpt-ocr-auto
+      |
+      v
+paperless-gpt: OCR with a vision model, replaces the document text
+      |                              adds  paperless-gpt-ocr-complete
+      |                              (or   paperless-gpt-ocr-failed after repeated failures)
+      v
+workflow 2 adds  paperless-ai-auto
+      |
+      v
+paperless-ai: title, tags, correspondent, document type, date, custom fields
+      |                              adds  ai-processed
+      |                              (or   paperless-ai-failed after repeated failures)
+      v
+workflow 3 removes the pipeline tags; the document is done
+```
+
+### Division of work
+
+| Step | Tool | Does | Does not |
+| --- | --- | --- | --- |
+| 1 | paperless-gpt | OCR only | Suggest or change metadata |
+| 2 | paperless-ai | Metadata | Touch the document text |
+
+Both tools can do more than that, but two tools writing the same fields overwrite each other. Here
+paperless-gpt has all metadata generation switched off, and paperless-ai only starts once OCR is finished.
+
+### Tags
+
+Create these tags in paperless-ngx before you start. The names are settings, so you can choose others.
+
+| Tag | Set by | Meaning |
+| --- | --- | --- |
+| `paperless-gpt-ocr-auto` | workflow 1 | Waiting for OCR |
+| `paperless-gpt-ocr-complete` | paperless-gpt | OCR finished |
+| `paperless-gpt-ocr-failed` | paperless-gpt | OCR gave up; needs a person |
+| `paperless-ai-auto` | workflow 2 | Waiting for classification |
+| `ai-processed` | paperless-ai | Classification finished |
+| `paperless-ai-failed` | paperless-ai | Classification gave up; needs a person |
+
+### Workflows in paperless-ngx
+
+| # | Trigger | Condition | Action |
+| --- | --- | --- | --- |
+| 1 | Document added | Has none of the three `paperless-gpt-ocr-*` tags | Assign `paperless-gpt-ocr-auto` |
+| 2 | Document updated | Has `paperless-gpt-ocr-complete`; has neither `ai-processed` nor `paperless-ai-auto` | Assign `paperless-ai-auto` |
+| 3 | Document updated | Has `ai-processed` and `paperless-gpt-ocr-complete` | Remove `ai-processed`, `paperless-ai-auto`, `paperless-gpt-ocr-complete` |
+| 4 | Document updated | Has `ai-processed` and `paperless-ai-auto`; not `paperless-gpt-ocr-complete` | Remove `ai-processed`, `paperless-ai-auto` |
+
+Workflow 4 is only needed if you sometimes add `paperless-ai-auto` by hand to reclassify a document without
+a new OCR run.
+
+### Settings for paperless-gpt
+
+```yaml
+environment:
+  # OCR
+  OCR_PROVIDER: "llm"
+  VISION_LLM_PROVIDER: "openai"            # or "ollama"
+  VISION_LLM_MODEL: "<your vision model>"
+  OCR_PROCESS_MODE: "image"
+  AUTO_OCR_TAG: "paperless-gpt-ocr-auto"
+  PDF_OCR_TAGGING: "true"
+  PDF_OCR_COMPLETE_TAG: "paperless-gpt-ocr-complete"
+  # Failures
+  FAIL_TAG: "paperless-gpt-ocr-failed"
+  OCR_MAX_RETRIES: "3"
+  OCR_SKIP_FAILED_PAGES: "true"
+  OCR_DEGENERATE_PAGE_ACTION: "fail"
+  # Leave the metadata to paperless-ai
+  AUTO_GENERATE_TITLE: "false"
+  AUTO_GENERATE_TAGS: "false"
+  AUTO_GENERATE_CORRESPONDENTS: "false"
+  AUTO_GENERATE_DOCUMENT_TYPE: "false"
+  AUTO_GENERATE_CREATED_DATE: "false"
+  PRESERVE_EXISTING_METADATA: "true"
+```
+
+### Settings for paperless-ai
+
+```ini
+PROCESS_PREDEFINED_DOCUMENTS=yes
+TAGS=paperless-ai-auto
+ADD_AI_PROCESSED_TAG=yes
+AI_PROCESSED_TAG_NAME=ai-processed
+BLOCK_SCAN_WHEN_TAGS_PRESENT=paperless-gpt-ocr-auto
+AI_FAILED_TAG_NAME=paperless-ai-failed
+MAX_PROCESSING_ATTEMPTS=3
+SCAN_INTERVAL=*/5 * * * *
+```
+
+`BLOCK_SCAN_WHEN_TAGS_PRESENT` keeps paperless-ai away from a document that is still waiting for OCR.
+
+### Day-to-day use
+
+- **New documents** need nothing from you. A page is usually classified within a few minutes of the scan,
+  depending on the model and on the scan interval of paperless-ai.
+- **Run OCR again** on a document by adding `paperless-gpt-ocr-auto` to it. It is classified again afterwards.
+- **Classify again** without OCR by adding `paperless-ai-auto`.
+- **Find stuck documents** with a saved view that filters on the two `-failed` tags, and one on the pipeline
+  tags to see what is in progress.
+- Use separate API tokens for the two tools, so the paperless-ngx audit log shows which one changed what.
+
+One known gap: a document sent to OCR again within one scan interval of being classified is not classified a
+second time and keeps `paperless-gpt-ocr-complete` and `paperless-ai-auto`. Remove both tags by hand, or wait
+a few minutes before requesting OCR again.
 
 [![License](https://img.shields.io/github/license/icereed/paperless-gpt)](LICENSE)
 [![Discord Banner](https://img.shields.io/badge/Join%20us%20on-Discord-blue?logo=discord)](https://discord.gg/fJQppDH2J7)
