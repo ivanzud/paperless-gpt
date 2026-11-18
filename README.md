@@ -60,6 +60,8 @@ paperless-gpt reads the text of each new document with a vision model, and
 [paperless-ai](https://github.com/ivanzud/paperless-ai) then classifies the document from that text. The two
 tools never talk to each other. Each one watches for a tag, and paperless-ngx workflows pass the document along.
 
+To set all of this up with one command, use the ready-made files in [`examples/pipeline`](examples/pipeline/).
+
 ```text
 scanner or upload
       |

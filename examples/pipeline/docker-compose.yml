@@ -1,0 +1,111 @@
+# paperless-gpt (OCR) and paperless-ai (classification) behind an existing
+# paperless-ngx. Everything is configured in .env; see README.md.
+name: paperless-pipeline
+
+services:
+  # Runs once before the two tools start: creates the tags and workflows in
+  # paperless-ngx and writes the first configuration of paperless-ai.
+  setup:
+    image: python:3.13-alpine
+    restart: "no"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./setup.py:/setup.py:ro
+      - paperless-ai-data:/paperless-ai-data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "/setup.py"]
+
+  paperless-gpt:
+    image: ${PAPERLESS_GPT_IMAGE:-ghcr.io/ivanzud/paperless-gpt:latest}
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      TZ: ${TZ:-UTC}
+      PAPERLESS_BASE_URL: ${PAPERLESS_URL}
+      PAPERLESS_PUBLIC_URL: ${PAPERLESS_PUBLIC_URL:-}
+      PAPERLESS_API_TOKEN: ${PAPERLESS_TOKEN}
+      LOG_LEVEL: info
+      # Models
+      LLM_PROVIDER: ${LLM_BACKEND:-ollama}
+      LLM_MODEL: ${TEXT_MODEL}
+      LLM_LANGUAGE: ${OUTPUT_LANGUAGE:-English}
+      VISION_LLM_PROVIDER: ${LLM_BACKEND:-ollama}
+      VISION_LLM_MODEL: ${VISION_MODEL}
+      VISION_LLM_TEMPERATURE: "0"
+      OLLAMA_HOST: ${OLLAMA_URL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # OCR
+      OCR_PROVIDER: llm
+      OCR_PROCESS_MODE: image
+      AUTO_OCR_TAG: paperless-gpt-ocr-auto
+      MANUAL_TAG: paperless-gpt-ocr-auto
+      PDF_OCR_TAGGING: "true"
+      PDF_OCR_COMPLETE_TAG: paperless-gpt-ocr-complete
+      # Failures
+      FAIL_TAG: paperless-gpt-ocr-failed
+      OCR_MAX_RETRIES: "3"
+      OCR_SKIP_FAILED_PAGES: "true"
+      OCR_DEGENERATE_PAGE_ACTION: fail
+      OCR_DEGENERATE_RETRIES: "1"
+      # The metadata is left to paperless-ai
+      AUTO_GENERATE_TITLE: "false"
+      AUTO_GENERATE_TAGS: "false"
+      AUTO_GENERATE_CORRESPONDENTS: "false"
+      AUTO_GENERATE_DOCUMENT_TYPE: "false"
+      AUTO_GENERATE_CREATED_DATE: "false"
+      PRESERVE_EXISTING_METADATA: "true"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PAPERLESS_GPT_PORT:-8080}:8080"
+    volumes:
+      - paperless-gpt-prompts:/app/prompts
+      - paperless-gpt-config:/app/config
+      - paperless-gpt-db:/app/db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  paperless-ai:
+    image: ${PAPERLESS_AI_IMAGE:-ghcr.io/ivanzud/paperless-ai:latest}
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    init: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges=true
+    environment:
+      TZ: ${TZ:-UTC}
+      PUID: "1000"
+      PGID: "1000"
+      PAPERLESS_AI_PORT: "3000"
+      # The document chat needs extra models; switch it on in the settings.
+      RAG_SERVICE_ENABLED: "false"
+      LOG_LEVEL: info
+      # Kept here so that saving the settings page cannot drop them.
+      AI_FAILED_TAG_NAME: paperless-ai-failed
+      MAX_PROCESSING_ATTEMPTS: "3"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PAPERLESS_AI_PORT:-3000}:3000"
+    volumes:
+      - paperless-ai-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  paperless-gpt-prompts:
+  paperless-gpt-config:
+  paperless-gpt-db:
+  paperless-ai-data:
