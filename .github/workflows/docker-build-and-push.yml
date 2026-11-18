@@ -4,10 +4,13 @@ permissions:
   contents: read
 
 # Provenance attestations and build records embed the whole push event,
-# including the pusher's e-mail address, so neither is published.
+# including the pusher's e-mail address, so neither is published. The build
+# step also prints its metadata to the public log; without provenance in
+# that metadata the push event stays out of the log as well.
 env:
   DOCKER_BUILD_SUMMARY: "false"
   DOCKER_BUILD_RECORD_UPLOAD: "false"
+  BUILDX_METADATA_PROVENANCE: "disabled"
 
 on:
   push:
