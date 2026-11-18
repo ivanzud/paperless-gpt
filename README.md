@@ -4,6 +4,53 @@
 > I update it whenever my own setup needs a change, so there is no release schedule and no promise
 > of support. Issues and pull requests are welcome and are answered as time allows. The image is published as `ghcr.io/ivanzud/paperless-gpt:latest` (linux/amd64 only). Badges and links further down come from the upstream project.
 
+## What this fork changes
+
+The fork contains everything in upstream `main` and adds the changes below. It is used mainly with a
+local vision model for OCR, so most of the work went into making unattended OCR dependable.
+
+**OCR quality**
+
+- Detects degenerate vision-model output (stopped at the token limit, stuck in a repetition loop, symbol
+  noise, or a remark about the page instead of its text), retries the page and then fails, skips or
+  accepts it: `OCR_DEGENERATE_PAGE_ACTION`, `OCR_DEGENERATE_RETRIES`, `OCR_DEGENERATE_RETRY_TEMPERATURE`.
+- Leaves out a page the model found no text on, such as a blank back side, instead of failing the
+  whole document (`OCR_SKIP_FAILED_PAGES`).
+- Converts HTML that a model returns into plain text and Markdown tables.
+- Strips leaked model control tokens and reasoning blocks from the stored text.
+- Optional `VISION_LLM_STOP_SEQUENCES` and `VISION_LLM_FREQUENCY_PENALTY` for models that run on.
+- Renders the OCR prompt per document, so it can refer to the text Paperless already has.
+- A separate Ollama host and thinking switch for the vision model (`VISION_OLLAMA_HOST`,
+  `VISION_OLLAMA_THINK`).
+- An additional OCR provider, `ios_ocr`, for an iOS OCR server.
+
+**Unattended processing**
+
+- A document that keeps failing is taken out of the queue and marked with `FAIL_TAG` instead of being
+  retried forever (`OCR_SKIP_FAILED_DOCUMENTS`).
+- An unreachable model or Paperless server does not count against the document.
+- Time limits per background document and per Paperless request (`BACKGROUND_DOCUMENT_TIMEOUT`,
+  `PAPERLESS_HTTP_TIMEOUT`).
+- `AUTO_OCR_THEN_CLASSIFY` runs metadata classification directly after a successful auto OCR.
+- Tag changes are applied to the tags the document has at that moment, so tags added meanwhile by a
+  workflow or a person are kept.
+
+**Metadata**
+
+- A suggested correspondent keeps the spelling of the existing one, and `CORRESPONDENT_PROMPT_LIMIT`
+  caps the list sent to the model.
+- Custom fields: select values are mapped back to option ids, and one refused field no longer discards
+  the whole update.
+- `OBJ_PERMISSIONS` sets the permissions of newly created tags and correspondents.
+
+**Privacy and operations**
+
+- Document text and prompts stay out of the log at info level; successful health probes are not logged.
+- The published image carries no build provenance or build records.
+- Pinned base images, and CI that enforces lint, security and complexity checks on Go 1.27.
+
+Every setting is described in the [environment variable table](#environment-variables).
+
 [![License](https://img.shields.io/github/license/icereed/paperless-gpt)](LICENSE)
 [![Discord Banner](https://img.shields.io/badge/Join%20us%20on-Discord-blue?logo=discord)](https://discord.gg/fJQppDH2J7)
 [![Docker Pulls](https://img.shields.io/docker/pulls/icereed/paperless-gpt)](https://hub.docker.com/r/icereed/paperless-gpt)
