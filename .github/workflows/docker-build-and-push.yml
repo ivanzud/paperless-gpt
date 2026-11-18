@@ -18,6 +18,8 @@ on:
   pull_request:
     branches:
       - main
+  # Lets a maintainer publish the image for the current main by hand.
+  workflow_dispatch:
 
 jobs:
   test:
