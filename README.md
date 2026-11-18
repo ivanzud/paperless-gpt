@@ -60,8 +60,6 @@ paperless-gpt reads the text of each new document with a vision model, and
 [paperless-ai](https://github.com/ivanzud/paperless-ai) then classifies the document from that text. The two
 tools never talk to each other. Each one watches for a tag, and paperless-ngx workflows pass the document along.
 
-To set all of this up with one command, use the ready-made files in [`examples/pipeline`](examples/pipeline/).
-
 ```text
 scanner or upload
       |
@@ -168,10 +166,6 @@ SCAN_INTERVAL=*/5 * * * *
 - **Find stuck documents** with a saved view that filters on the two `-failed` tags, and one on the pipeline
   tags to see what is in progress.
 - Use separate API tokens for the two tools, so the paperless-ngx audit log shows which one changed what.
-
-One known gap: a document sent to OCR again within one scan interval of being classified is not classified a
-second time and keeps `paperless-gpt-ocr-complete` and `paperless-ai-auto`. Remove both tags by hand, or wait
-a few minutes before requesting OCR again.
 
 [![License](https://img.shields.io/github/license/icereed/paperless-gpt)](LICENSE)
 [![Discord Banner](https://img.shields.io/badge/Join%20us%20on-Discord-blue?logo=discord)](https://discord.gg/fJQppDH2J7)
